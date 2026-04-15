@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import Plot from 'react-plotly.js'
 import { studiesApi } from '../../api/studies'
-import type { EpochResult } from '../../types'
+import type { EpochResult, DisplayEEGData } from '../../types'
 
 const WINDOW_SEC = 10
 
@@ -20,7 +20,7 @@ export default function EEGWaveformViewer({ studyId, durationSec, epochs, onEpoc
   const { data, isFetching } = useQuery({
     queryKey: ['display-data', studyId, windowStart],
     queryFn: () => studiesApi.getDisplayData(studyId, windowStart, windowEnd),
-    keepPreviousData: true,
+    placeholderData: (prev: DisplayEEGData | undefined) => prev,
   })
 
   // Seizure regions for shape overlays
