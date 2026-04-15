@@ -1,5 +1,6 @@
 import { useMemo } from 'react'
 import Plot from 'react-plotly.js'
+import type Plotly from 'plotly.js'
 import type { EpochResult } from '../../types'
 
 interface Props {
@@ -76,7 +77,7 @@ export default function SeizureProbabilityChart({ epochs, onEpochClick }: Props)
         }}
         config={{ responsive: true, displayModeBar: false }}
         style={{ width: '100%' }}
-        onClick={(event) => {
+        onClick={(event: Plotly.PlotMouseEvent) => {
           if (onEpochClick && event.points[0]) {
             const idx = event.points[0].pointIndex
             if (epochs[idx]) onEpochClick(epochs[idx])
