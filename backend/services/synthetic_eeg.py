@@ -180,41 +180,33 @@ class SyntheticEEGGenerator:
         rng: np.random.Generator,
     ) -> np.ndarray:
         """
-        Inject healthy/normal EEG patterns:
-        1. Strong, symmetric posterior alpha (well-organised alpha rhythm)
-        2. Positive FAA — left frontal alpha equal or slightly stronger than right
-        3. Low theta, balanced beta
-        This produces FAA ≥ 0 and high alpha power → Minimal/Mild scores.
-        """
-        sr = self.SAMPLE_RATE
+        Inject healthy/normal EEG patterns → positive or near-zero FAA.
 
-        # Boost posterior alpha strongly (O1, O2, P3, P4, Pz)
+        FAA = ln(alpha_right) - ln(alpha_left).
+        Positive FAA requires F4/Fp2 alpha > F3/Fp1 alpha.
+
+        1. Strong posterior alpha (well-organised rhythm)
+        2. Boost RIGHT frontal alpha (F4, Fp2, F8) — increases denominator
+        3. Keep LEFT frontal alpha at background level (no depression injection)
+        Result: FAA ≥ 0 → Minimal/Mild score.
+        """
+        # Boost posterior alpha strongly (well-organised posterior alpha rhythm)
         posterior = {"O1": 7, "O2": 8, "P3": 5, "P4": 6, "Pz": 18}
         for ch, idx in posterior.items():
             if idx < data.shape[0]:
                 alpha_freq = 10.0 + rng.uniform(-0.3, 0.3)
-                alpha_amp = CHANNEL_AMPLITUDE.get(ch, 40) * 0.7
+                alpha_amp = CHANNEL_AMPLITUDE.get(ch, 40) * 0.8
                 data[idx] += alpha_amp * np.sin(
                     2 * np.pi * alpha_freq * t + rng.uniform(0, 2 * np.pi)
                 )
 
-        # Left frontal alpha boost → positive FAA (healthy: left ≥ right)
-        left_frontal = {"Fp1": 0, "F3": 2, "F7": 10}
-        for ch, idx in left_frontal.items():
-            if idx < data.shape[0]:
-                alpha_freq = 10.0 + rng.uniform(-0.3, 0.3)
-                alpha_amp = CHANNEL_AMPLITUDE.get(ch, 35) * 0.35
-                data[idx] += alpha_amp * np.sin(
-                    2 * np.pi * alpha_freq * t + rng.uniform(0, 2 * np.pi)
-                )
-
-        # Slightly suppress right frontal alpha for asymmetry realism
+        # Boost RIGHT frontal alpha (F4, Fp2, F8) → FAA = ln(F4) - ln(F3) becomes positive
         right_frontal = {"Fp2": 1, "F4": 3, "F8": 11}
         for ch, idx in right_frontal.items():
             if idx < data.shape[0]:
                 alpha_freq = 10.0 + rng.uniform(-0.3, 0.3)
-                alpha_amp = CHANNEL_AMPLITUDE.get(ch, 35) * 0.12
-                data[idx] -= alpha_amp * np.sin(
+                alpha_amp = CHANNEL_AMPLITUDE.get(ch, 35) * 0.5
+                data[idx] += alpha_amp * np.sin(
                     2 * np.pi * alpha_freq * t + rng.uniform(0, 2 * np.pi)
                 )
 
