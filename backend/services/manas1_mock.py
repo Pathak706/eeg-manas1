@@ -206,15 +206,19 @@ class MANAS1MockService:
         theta = band_powers.get("theta", 0.2)
         beta = band_powers.get("beta", 0.2)
 
-        faa_component = float(np.clip(-faa * 2, -1, 1))  # negative FAA → positive component
-        alpha_suppression = float(np.clip(1.0 - alpha * 3, 0, 1))  # low alpha → high contribution
-        theta_beta_elevation = float(np.clip((theta / max(beta, 0.01) - 1.0) * 0.5, 0, 1))
+        # FAA is the strongest validated EEG biomarker for depression.
+        # Scale: FAA of -0.2 → component ~0.57; -0.3 → ~0.77; 0.0 → 0.5
+        faa_component = float(np.clip(0.5 - faa * 1.5, 0, 1))
+        # Alpha suppression: <20% is clinically significant
+        alpha_suppression = float(np.clip(1.0 - alpha / 0.25, 0, 1))
+        # Theta/beta elevation: ratio > 1.5 is abnormal
+        theta_beta_elevation = float(np.clip((theta / max(beta, 0.01) - 1.0) / 2.0, 0, 1))
 
         raw_contribution = (
-            0.35 * faa_component +
+            0.45 * faa_component +        # FAA is primary biomarker
             0.25 * alpha_suppression +
-            0.20 * theta_beta_elevation +
-            0.20 * base_severity
+            0.15 * theta_beta_elevation +
+            0.15 * base_severity
         )
         noise = rng.normal(0, 0.05)
         depression_contribution = float(np.clip(raw_contribution + noise, 0.0, 1.0))
@@ -315,7 +319,7 @@ class MANAS1MockService:
                 ),
             ))
 
-        if biomarkers.delta_power > 0.35:
+        if biomarkers.delta_power > 0.30:
             flags.append(ClinicalFlag(
                 flag_type="SLEEP_DISRUPTION",
                 severity="LOW",
