@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+
+# Backend data
+backend/eeg_poc.db
+backend/storage/uploads/*
+backend/storage/processed/*
+!backend/storage/uploads/.gitkeep
+!backend/storage/processed/.gitkeep
+
+# Node
+node_modules/
+dist/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs
+*.log
+
+# Local files not for deployment
+s12984-025-01645-5.pdf
+EEG_Platform_x_NeuroDx_Collaboration_Proposal.docx
+.claude/
