@@ -37,12 +37,6 @@ export interface Study {
   original_filename: string
 }
 
-export interface ExtractedReportText {
-  study_id: number
-  markdown_text: string
-  source_confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN'
-}
-
 export interface ProgressStatus {
   study_id: number
   status: Study['status']
@@ -71,15 +65,27 @@ export interface ClinicalFlag {
   description: string
 }
 
+export interface BiomarkerSummary {
+  alpha_power: number
+  beta_power: number
+  theta_power: number
+  delta_power: number
+  gamma_power: number
+  frontal_alpha_asymmetry: number
+  alpha_beta_ratio: number
+  theta_beta_ratio: number
+}
+
 export interface EpochResult {
   epoch_index: number
   start_time_sec: number
   end_time_sec: number
-  seizure_probability: number
+  depression_contribution: number
   artifact_probability: number
   channel_attention: Record<string, number>
   dominant_frequency_hz: number
   band_powers: Record<string, number>
+  frontal_alpha_asymmetry: number
   confidence: number
 }
 
@@ -87,11 +93,29 @@ export interface AnalysisResult {
   id: number
   study_id: number
   model_version: string
-  overall_seizure_probability: number
+  depression_severity_score: number
+  depression_risk_level: string
+  frontal_alpha_asymmetry: number
+  biomarkers: BiomarkerSummary
   clinical_impression: string
   background_rhythm: string
   clinical_flags: ClinicalFlag[]
   processing_time_ms: number
   epochs: EpochResult[]
   created_at: string
+}
+
+export interface ExtractedReportText {
+  study_id: number
+  markdown_text: string
+  source_confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN'
+}
+
+export interface DepressionTrendPoint {
+  study_id: number
+  study_date: string
+  depression_severity_score: number
+  depression_risk_level: string
+  frontal_alpha_asymmetry: number
+  biomarkers: BiomarkerSummary
 }

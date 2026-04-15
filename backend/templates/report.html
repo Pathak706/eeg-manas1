@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>EEG Analysis Report — {{ patient.name }}</title>
+<title>EEG Depression Assessment — {{ patient.name }}</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Segoe UI', Arial, sans-serif; font-size: 12px; color: #1a1a2e; background: #fff; }
@@ -16,9 +16,11 @@
   .header-right .report-id { font-weight: 600; color: #1a3a6e; }
 
   .badge { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; letter-spacing: 0.3px; }
-  .badge-high { background: #fee2e2; color: #991b1b; }
+  .badge-minimal { background: #d1fae5; color: #065f46; }
+  .badge-mild { background: #dbeafe; color: #1e40af; }
   .badge-moderate { background: #fef3c7; color: #92400e; }
-  .badge-low { background: #d1fae5; color: #065f46; }
+  .badge-moderately-severe { background: #fed7aa; color: #9a3412; }
+  .badge-severe { background: #fee2e2; color: #991b1b; }
   .badge-info { background: #dbeafe; color: #1e40af; }
 
   section { margin-bottom: 24px; }
@@ -26,21 +28,25 @@
 
   .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; }
   .info-row { display: flex; gap: 8px; }
-  .info-label { font-weight: 600; color: #475569; min-width: 130px; }
+  .info-label { font-weight: 600; color: #475569; min-width: 150px; }
   .info-value { color: #1a1a2e; }
 
   .summary-box { background: #f8fafc; border: 1px solid #e2e8f0; border-left: 4px solid #1a3a6e; border-radius: 6px; padding: 16px; }
-  .summary-box.high { border-left-color: #dc2626; background: #fff5f5; }
+  .summary-box.severe { border-left-color: #dc2626; background: #fff5f5; }
+  .summary-box.moderately-severe { border-left-color: #ea580c; background: #fff7ed; }
   .summary-box.moderate { border-left-color: #d97706; background: #fffbeb; }
-  .summary-box.low { border-left-color: #059669; background: #f0fdf4; }
-  .prob-display { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
-  .prob-number { font-size: 36px; font-weight: 800; color: #1a3a6e; }
-  .prob-label { font-size: 11px; color: #64748b; line-height: 1.4; }
-  .prob-bar { height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin: 8px 0; }
-  .prob-fill { height: 100%; border-radius: 4px; }
-  .fill-high { background: linear-gradient(90deg, #f87171, #dc2626); }
-  .fill-moderate { background: linear-gradient(90deg, #fbbf24, #d97706); }
-  .fill-low { background: linear-gradient(90deg, #34d399, #059669); }
+  .summary-box.mild { border-left-color: #2563eb; background: #eff6ff; }
+  .summary-box.minimal { border-left-color: #059669; background: #f0fdf4; }
+  .score-display { display: flex; align-items: center; gap: 16px; margin-bottom: 12px; }
+  .score-number { font-size: 36px; font-weight: 800; color: #1a3a6e; }
+  .score-label { font-size: 11px; color: #64748b; line-height: 1.4; }
+  .score-bar { height: 8px; background: #e2e8f0; border-radius: 4px; overflow: hidden; margin: 8px 0; }
+  .score-fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #34d399, #fbbf24, #f87171); }
+
+  .biomarker-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 12px; }
+  .biomarker-card { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; text-align: center; }
+  .biomarker-card .value { font-size: 18px; font-weight: 700; color: #1a3a6e; }
+  .biomarker-card .label { font-size: 10px; color: #64748b; margin-top: 2px; }
 
   table { width: 100%; border-collapse: collapse; font-size: 11px; }
   table thead th { background: #1a3a6e; color: #fff; padding: 8px 10px; text-align: left; font-weight: 600; font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -62,8 +68,6 @@
     .page { padding: 16px; max-width: 100%; }
     .no-print { display: none !important; }
     section { page-break-inside: avoid; }
-    table { page-break-inside: auto; }
-    tr { page-break-inside: avoid; }
   }
 </style>
 </head>
@@ -73,20 +77,15 @@
   <!-- Header -->
   <div class="header">
     <div class="header-left">
-      <h1>EEG ANALYSIS REPORT</h1>
+      <h1>EEG DEPRESSION ASSESSMENT REPORT</h1>
       <p>Powered by MANAS-1 Foundation Model &nbsp;|&nbsp; EEG AI Platform</p>
     </div>
     <div class="header-right">
       <div class="report-id">Study #{{ study.id }}</div>
       <div>Generated: {{ generated_at[:10] }}</div>
       <div style="margin-top:6px">
-        {% if ai_analysis.risk_level == 'HIGH' %}
-          <span class="badge badge-high">HIGH SEIZURE RISK</span>
-        {% elif ai_analysis.risk_level == 'MODERATE' %}
-          <span class="badge badge-moderate">MODERATE RISK</span>
-        {% else %}
-          <span class="badge badge-low">LOW RISK</span>
-        {% endif %}
+        {% set level_class = ai_analysis.depression_risk_level | lower | replace(' ', '-') %}
+        <span class="badge badge-{{ level_class }}">{{ ai_analysis.depression_risk_level | upper }} DEPRESSION</span>
       </div>
     </div>
   </div>
@@ -115,26 +114,66 @@
       <div class="info-row"><span class="info-label">AI Model</span><span class="info-value">{{ ai_analysis.model_version }}</span></div>
       <div class="info-row"><span class="info-label">Processing Time</span><span class="info-value">{{ ai_analysis.processing_time_ms }}ms</span></div>
     </div>
-    {% if study.is_synthetic %}<p style="margin-top:8px;color:#6366f1;font-size:10px;font-weight:600;">⚠ This study used synthetically generated EEG data for demonstration purposes.</p>{% endif %}
+    {% if study.is_synthetic %}<p style="margin-top:8px;color:#6366f1;font-size:10px;font-weight:600;">This study used synthetically generated EEG data for demonstration purposes.</p>{% endif %}
   </section>
 
-  <!-- AI Analysis Summary -->
+  <!-- Depression Assessment Summary -->
   <section>
-    <h2>AI Analysis Summary</h2>
-    <div class="summary-box {{ ai_analysis.risk_level | lower }}">
-      <div class="prob-display">
-        <div class="prob-number">{{ ai_analysis.overall_seizure_probability_pct }}</div>
-        <div class="prob-label">
-          <strong>Overall Seizure Probability</strong><br>
-          Risk Level: <strong>{{ ai_analysis.risk_level }}</strong><br>
-          Model: {{ ai_analysis.model_version }}
+    <h2>Depression Assessment Summary</h2>
+    {% set level_class = ai_analysis.depression_risk_level | lower | replace(' ', '-') %}
+    <div class="summary-box {{ level_class }}">
+      <div class="score-display">
+        <div class="score-number">{{ ai_analysis.depression_severity_display }}</div>
+        <div class="score-label">
+          <strong>Depression Severity Score (PHQ-9 Equivalent)</strong><br>
+          Risk Level: <strong>{{ ai_analysis.depression_risk_level }}</strong><br>
+          Frontal Alpha Asymmetry: <strong>{{ ai_analysis.frontal_alpha_asymmetry }}</strong>
         </div>
       </div>
-      <div class="prob-bar">
-        <div class="prob-fill fill-{{ ai_analysis.risk_level | lower }}" style="width: {{ ai_analysis.overall_seizure_probability_pct }}"></div>
+      <div class="score-bar">
+        <div class="score-fill" style="width: {{ (ai_analysis.depression_severity_score / 27 * 100) | round }}%"></div>
       </div>
       <div style="margin-top:10px">
         <strong>Background Rhythm:</strong> {{ ai_analysis.background_rhythm }}
+      </div>
+    </div>
+  </section>
+
+  <!-- Brain Biomarkers -->
+  <section>
+    <h2>Brain Biomarkers</h2>
+    <div class="biomarker-grid">
+      <div class="biomarker-card">
+        <div class="value">{{ biomarkers.alpha_power }}</div>
+        <div class="label">Alpha Power</div>
+      </div>
+      <div class="biomarker-card">
+        <div class="value">{{ biomarkers.beta_power }}</div>
+        <div class="label">Beta Power</div>
+      </div>
+      <div class="biomarker-card">
+        <div class="value">{{ biomarkers.theta_power }}</div>
+        <div class="label">Theta Power</div>
+      </div>
+      <div class="biomarker-card">
+        <div class="value">{{ biomarkers.delta_power }}</div>
+        <div class="label">Delta Power</div>
+      </div>
+      <div class="biomarker-card">
+        <div class="value">{{ biomarkers.frontal_alpha_asymmetry }}</div>
+        <div class="label">Frontal Alpha Asymmetry</div>
+      </div>
+      <div class="biomarker-card">
+        <div class="value">{{ biomarkers.alpha_beta_ratio }}</div>
+        <div class="label">Alpha/Beta Ratio</div>
+      </div>
+      <div class="biomarker-card">
+        <div class="value">{{ biomarkers.theta_beta_ratio }}</div>
+        <div class="label">Theta/Beta Ratio</div>
+      </div>
+      <div class="biomarker-card">
+        <div class="value">{{ biomarkers.gamma_power }}</div>
+        <div class="label">Gamma Power</div>
       </div>
     </div>
   </section>
@@ -148,8 +187,6 @@
         <tr>
           <th>Type</th>
           <th>Severity</th>
-          <th>Onset</th>
-          <th>Duration</th>
           <th>Channels</th>
           <th>Description</th>
         </tr>
@@ -159,8 +196,6 @@
         <tr>
           <td><span class="badge badge-info">{{ flag.flag_type | replace('_', ' ') }}</span></td>
           <td class="sev-{{ flag.severity | lower }}">{{ flag.severity }}</td>
-          <td>{{ flag.onset_formatted }}</td>
-          <td>{{ "%.0f"|format(flag.duration_sec) }}s</td>
           <td>{{ flag.channels_involved }}</td>
           <td>{{ flag.description }}</td>
         </tr>
@@ -172,14 +207,15 @@
 
   <!-- Top Epochs -->
   <section>
-    <h2>Highest-Probability Epochs (Top {{ top_epochs | length }} of {{ total_epochs }})</h2>
+    <h2>Highest Depression Contribution Epochs (Top {{ top_epochs | length }} of {{ total_epochs }})</h2>
     <table>
       <thead>
         <tr>
           <th>#</th>
-          <th>Time (start → end)</th>
-          <th>Seizure Probability</th>
-          <th>Dominant Freq.</th>
+          <th>Time</th>
+          <th>Depression Contribution</th>
+          <th>FAA</th>
+          <th>Dom. Freq.</th>
           <th>Top Channels</th>
         </tr>
       </thead>
@@ -187,16 +223,9 @@
         {% for ep in top_epochs %}
         <tr>
           <td>{{ ep.epoch_index + 1 }}</td>
-          <td>{{ ep.start_formatted }} → {{ ep.end_formatted }}</td>
-          <td>
-            {% if ep.seizure_probability_pct | float > 60 %}
-              <span class="sev-high">{{ ep.seizure_probability_pct }}</span>
-            {% elif ep.seizure_probability_pct | float > 35 %}
-              <span class="sev-medium">{{ ep.seizure_probability_pct }}</span>
-            {% else %}
-              <span class="sev-low">{{ ep.seizure_probability_pct }}</span>
-            {% endif %}
-          </td>
+          <td>{{ ep.start_formatted }} - {{ ep.end_formatted }}</td>
+          <td><strong>{{ ep.depression_contribution_pct }}</strong></td>
+          <td>{{ ep.faa }}</td>
           <td>{{ ep.dominant_frequency_hz }} Hz</td>
           <td>{{ ep.top_channels }}</td>
         </tr>
@@ -214,16 +243,17 @@
   <!-- Disclaimer -->
   <div class="disclaimer">
     <strong>IMPORTANT DISCLAIMER</strong>
-    This report was generated by the MANAS-1 AI foundation model ({{ ai_analysis.model_version }}) and represents an automated pre-read only.
-    It does NOT constitute a clinical diagnosis. All findings must be reviewed, interpreted, and confirmed by a qualified neurologist
-    before any clinical decision is made. The AI model may produce false positives or false negatives. This tool is intended to
-    assist—not replace—the clinical judgment of a licensed medical professional.
-    For research and demonstration purposes only in the current version.
+    This report was generated by the MANAS-1 AI foundation model ({{ ai_analysis.model_version }}) and represents an
+    automated depression screening tool only. It does NOT constitute a clinical diagnosis. EEG-based depression biomarkers
+    (frontal alpha asymmetry, theta/beta ratio) should be interpreted alongside standardised clinical instruments
+    (PHQ-9, BDI-II, Hamilton Rating Scale) and comprehensive psychiatric evaluation.
+    All findings must be reviewed by a qualified psychiatrist or neurologist. For research and demonstration purposes
+    only in the current version.
   </div>
 
   <!-- Footer -->
   <div class="footer">
-    <span>EEG AI Platform × Intellihealth NeuroDx (MANAS-1) &nbsp;|&nbsp; Confidential</span>
+    <span>EEG AI Platform x Intellihealth NeuroDx (MANAS-1) &nbsp;|&nbsp; Confidential</span>
     <span>Report generated: {{ generated_at[:19] | replace('T', ' ') }} UTC</span>
   </div>
 

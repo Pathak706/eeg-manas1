@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, Float, Integer, ForeignKey, DateTime, func
+from sqlalchemy import String, Float, Integer, Text, ForeignKey, DateTime, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from db.base import Base
 
@@ -9,8 +9,11 @@ class AnalysisResult(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     study_id: Mapped[int] = mapped_column(ForeignKey("studies.id"), unique=True, index=True)
-    model_version: Mapped[str] = mapped_column(String(50), default="manas1-mock-v0.1")
-    overall_seizure_probability: Mapped[float] = mapped_column(Float, default=0.0)
+    model_version: Mapped[str] = mapped_column(String(50), default="manas1-depression-v0.1")
+    depression_severity_score: Mapped[float] = mapped_column(Float, default=0.0)  # 0–27 PHQ-9
+    depression_risk_level: Mapped[str] = mapped_column(String(30), default="")
+    frontal_alpha_asymmetry: Mapped[float] = mapped_column(Float, default=0.0)
+    biomarkers_json: Mapped[str] = mapped_column(Text, default="{}")  # JSON BiomarkerSummary
     clinical_impression: Mapped[str] = mapped_column(String(2000), default="")
     background_rhythm: Mapped[str] = mapped_column(String(200), default="")
     clinical_flags: Mapped[str] = mapped_column(String(5000), default="[]")  # JSON list
@@ -32,11 +35,12 @@ class EpochResult(Base):
     epoch_index: Mapped[int] = mapped_column(Integer)
     start_time_sec: Mapped[float] = mapped_column(Float)
     end_time_sec: Mapped[float] = mapped_column(Float)
-    seizure_probability: Mapped[float] = mapped_column(Float)
+    depression_contribution: Mapped[float] = mapped_column(Float, default=0.0)  # 0–1
     artifact_probability: Mapped[float] = mapped_column(Float)
     channel_attention: Mapped[str] = mapped_column(String(2000), default="{}")  # JSON dict
     dominant_frequency_hz: Mapped[float] = mapped_column(Float, default=0.0)
     band_powers: Mapped[str] = mapped_column(String(500), default="{}")  # JSON dict
+    frontal_alpha_asymmetry: Mapped[float] = mapped_column(Float, default=0.0)
     confidence: Mapped[float] = mapped_column(Float, default=0.9)
 
     analysis: Mapped["AnalysisResult"] = relationship("AnalysisResult", back_populates="epochs")

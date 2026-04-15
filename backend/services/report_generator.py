@@ -19,7 +19,7 @@ class ReportGenerator:
         study: Study,
         patient: Patient,
     ) -> dict:
-        top_epochs = sorted(analysis.epochs, key=lambda e: e.seizure_probability, reverse=True)[:10]
+        top_epochs = sorted(analysis.epochs, key=lambda e: e.depression_contribution, reverse=True)[:10]
 
         return {
             "generated_at": datetime.utcnow().isoformat(),
@@ -40,16 +40,23 @@ class ReportGenerator:
             },
             "ai_analysis": {
                 "model_version": analysis.model_version,
-                "overall_seizure_probability": analysis.overall_seizure_probability,
-                "overall_seizure_probability_pct": f"{analysis.overall_seizure_probability:.0%}",
+                "depression_severity_score": analysis.depression_severity_score,
+                "depression_severity_display": f"{analysis.depression_severity_score:.1f}/27",
+                "depression_risk_level": analysis.depression_risk_level,
+                "frontal_alpha_asymmetry": f"{analysis.frontal_alpha_asymmetry:.3f}",
                 "background_rhythm": analysis.background_rhythm,
                 "clinical_impression": analysis.clinical_impression,
                 "processing_time_ms": analysis.processing_time_ms,
-                "risk_level": (
-                    "HIGH" if analysis.overall_seizure_probability >= 0.6
-                    else "MODERATE" if analysis.overall_seizure_probability >= 0.35
-                    else "LOW"
-                ),
+            },
+            "biomarkers": {
+                "alpha_power": f"{analysis.biomarkers.alpha_power:.0%}",
+                "beta_power": f"{analysis.biomarkers.beta_power:.0%}",
+                "theta_power": f"{analysis.biomarkers.theta_power:.0%}",
+                "delta_power": f"{analysis.biomarkers.delta_power:.0%}",
+                "gamma_power": f"{analysis.biomarkers.gamma_power:.0%}",
+                "frontal_alpha_asymmetry": f"{analysis.biomarkers.frontal_alpha_asymmetry:.3f}",
+                "alpha_beta_ratio": f"{analysis.biomarkers.alpha_beta_ratio:.2f}",
+                "theta_beta_ratio": f"{analysis.biomarkers.theta_beta_ratio:.2f}",
             },
             "clinical_flags": [
                 {
@@ -68,8 +75,9 @@ class ReportGenerator:
                     "epoch_index": ep.epoch_index,
                     "start_formatted": _format_time(ep.start_time_sec),
                     "end_formatted": _format_time(ep.end_time_sec),
-                    "seizure_probability_pct": f"{ep.seizure_probability:.0%}",
+                    "depression_contribution_pct": f"{ep.depression_contribution:.0%}",
                     "dominant_frequency_hz": f"{ep.dominant_frequency_hz:.1f}",
+                    "faa": f"{ep.frontal_alpha_asymmetry:.3f}",
                     "top_channels": ", ".join(
                         sorted(ep.channel_attention, key=ep.channel_attention.get, reverse=True)[:3]
                     ),

@@ -6,11 +6,31 @@ from sqlalchemy.orm import Session
 from db.base import get_db
 from models.study import Study
 from models.analysis import AnalysisResult, EpochResult
-from schemas.analysis import AnalysisResultFull, EpochResultSchema, ClinicalFlagSchema
+from schemas.analysis import (
+    AnalysisResultFull, EpochResultSchema, ClinicalFlagSchema,
+    BiomarkerSummarySchema, DepressionTrendPoint,
+)
 from schemas.study import ExtractedReportText
 from services.report_generator import ReportGenerator
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
+
+
+def _parse_biomarkers(analysis: AnalysisResult) -> BiomarkerSummarySchema:
+    try:
+        bm = json.loads(analysis.biomarkers_json)
+    except Exception:
+        bm = {}
+    return BiomarkerSummarySchema(
+        alpha_power=bm.get("alpha_power", 0),
+        beta_power=bm.get("beta_power", 0),
+        theta_power=bm.get("theta_power", 0),
+        delta_power=bm.get("delta_power", 0),
+        gamma_power=bm.get("gamma_power", 0),
+        frontal_alpha_asymmetry=bm.get("frontal_alpha_asymmetry", 0),
+        alpha_beta_ratio=bm.get("alpha_beta_ratio", 0),
+        theta_beta_ratio=bm.get("theta_beta_ratio", 0),
+    )
 
 
 def _parse_analysis(analysis: AnalysisResult) -> AnalysisResultFull:
@@ -20,11 +40,12 @@ def _parse_analysis(analysis: AnalysisResult) -> AnalysisResultFull:
             epoch_index=ep.epoch_index,
             start_time_sec=ep.start_time_sec,
             end_time_sec=ep.end_time_sec,
-            seizure_probability=ep.seizure_probability,
+            depression_contribution=ep.depression_contribution,
             artifact_probability=ep.artifact_probability,
             channel_attention=json.loads(ep.channel_attention),
             dominant_frequency_hz=ep.dominant_frequency_hz,
             band_powers=json.loads(ep.band_powers),
+            frontal_alpha_asymmetry=ep.frontal_alpha_asymmetry,
             confidence=ep.confidence,
         ))
 
@@ -37,7 +58,10 @@ def _parse_analysis(analysis: AnalysisResult) -> AnalysisResultFull:
         id=analysis.id,
         study_id=analysis.study_id,
         model_version=analysis.model_version,
-        overall_seizure_probability=analysis.overall_seizure_probability,
+        depression_severity_score=analysis.depression_severity_score,
+        depression_risk_level=analysis.depression_risk_level,
+        frontal_alpha_asymmetry=analysis.frontal_alpha_asymmetry,
+        biomarkers=_parse_biomarkers(analysis),
         clinical_impression=analysis.clinical_impression,
         background_rhythm=analysis.background_rhythm,
         clinical_flags=flags,
@@ -64,11 +88,9 @@ def get_extracted_text(study_id: int, db: Session = Depends(get_db)):
     if study.source_type != "pdf":
         raise HTTPException(status_code=400, detail="This endpoint is only for PDF-sourced studies")
 
-    # Get source_confidence from analysis if available
     analysis = db.query(AnalysisResult).filter(AnalysisResult.study_id == study_id).first()
     source_confidence = "UNKNOWN"
     if analysis:
-        # Embedded in clinical_impression as "Source confidence: X."
         impression = analysis.clinical_impression or ""
         for level in ("HIGH", "MEDIUM", "LOW"):
             if f"Source confidence: {level}" in impression:

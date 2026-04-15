@@ -83,16 +83,17 @@ async def upload_study(
 async def create_demo_study(
     background_tasks: BackgroundTasks,
     patient_id: int = Query(...),
-    include_seizure: bool = Query(True),
+    include_seizure: bool = Query(True),  # kept for backwards compat
+    include_depression: bool = Query(True),
     db: Session = Depends(get_db),
 ):
     patient = db.query(Patient).filter(Patient.id == patient_id).first()
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
 
-    # Generate synthetic EEG
+    # Generate synthetic EEG with depression patterns
     generator = SyntheticEEGGenerator()
-    result = generator.generate(include_seizure=include_seizure)
+    result = generator.generate(include_depression=include_depression)
 
     # Save as .npz
     upload_dir = Path(settings.UPLOAD_DIR)
@@ -199,3 +200,46 @@ def get_display_data(
 def list_studies_for_patient(patient_id: int, db: Session = Depends(get_db)):
     studies = db.query(Study).filter(Study.patient_id == patient_id).order_by(Study.created_at.desc()).all()
     return [_study_to_read(s) for s in studies]
+
+
+@router.get("/depression-trend/{patient_id}")
+def get_depression_trend(patient_id: int, db: Session = Depends(get_db)):
+    """Return chronological depression scores across all completed studies for a patient."""
+    from models.analysis import AnalysisResult
+    import json as _json
+
+    studies = (
+        db.query(Study)
+        .filter(Study.patient_id == patient_id, Study.status == "complete")
+        .order_by(Study.created_at.asc())
+        .all()
+    )
+
+    trend = []
+    for s in studies:
+        analysis = db.query(AnalysisResult).filter(AnalysisResult.study_id == s.id).first()
+        if not analysis:
+            continue
+        try:
+            bm = _json.loads(analysis.biomarkers_json)
+        except Exception:
+            bm = {}
+        trend.append({
+            "study_id": s.id,
+            "study_date": s.study_date.isoformat() if s.study_date else "",
+            "depression_severity_score": analysis.depression_severity_score,
+            "depression_risk_level": analysis.depression_risk_level,
+            "frontal_alpha_asymmetry": analysis.frontal_alpha_asymmetry,
+            "biomarkers": {
+                "alpha_power": bm.get("alpha_power", 0),
+                "beta_power": bm.get("beta_power", 0),
+                "theta_power": bm.get("theta_power", 0),
+                "delta_power": bm.get("delta_power", 0),
+                "gamma_power": bm.get("gamma_power", 0),
+                "frontal_alpha_asymmetry": bm.get("frontal_alpha_asymmetry", 0),
+                "alpha_beta_ratio": bm.get("alpha_beta_ratio", 0),
+                "theta_beta_ratio": bm.get("theta_beta_ratio", 0),
+            },
+        })
+
+    return trend

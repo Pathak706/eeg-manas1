@@ -1,12 +1,14 @@
 """
-MANAS-1 Mock Inference Service.
+MANAS-1 Mock Inference Service — Depression Assessment.
 
-Simulates the output contract of the real MANAS-1 400M-parameter EEG foundation model.
+Simulates the output contract of the real MANAS-1 400M-parameter EEG foundation model
+for depression severity assessment. Uses EEG biomarkers (frontal alpha asymmetry,
+alpha/beta ratio, theta elevation) to compute a PHQ-9-equivalent depression score.
+
 To swap in the real model: replace MANAS1MockService with MANAS1HTTPClient that POSTs
 preprocessed epoch arrays to the actual inference endpoint and parses the same response types.
 """
 import asyncio
-import json
 import time
 from dataclasses import dataclass, field
 
@@ -14,9 +16,30 @@ import numpy as np
 
 from services.eeg_preprocessor import PreprocessedEEG
 from config import settings
+from utils.signal_utils import (
+    compute_band_powers_per_channel,
+    compute_frontal_alpha_asymmetry,
+    FRONTAL_PAIRS,
+)
 
-# Channels considered as the focal temporal region for seizure attention
-TEMPORAL_CHANNELS = {"T3", "T4", "F7", "F8", "T5", "T6"}
+# Frontal channels for depression biomarker analysis
+FRONTAL_CHANNELS = {"Fp1", "Fp2", "F3", "F4", "F7", "F8"}
+
+# PHQ-9 severity mapping
+DEPRESSION_LEVELS = [
+    (4, "Minimal"),
+    (9, "Mild"),
+    (14, "Moderate"),
+    (19, "Moderately Severe"),
+    (27, "Severe"),
+]
+
+
+def phq9_risk_level(score: float) -> str:
+    for threshold, label in DEPRESSION_LEVELS:
+        if score <= threshold:
+            return label
+    return "Severe"
 
 
 @dataclass
@@ -24,17 +47,19 @@ class EpochAnalysis:
     epoch_index: int
     start_time_sec: float
     end_time_sec: float
-    seizure_probability: float
+    depression_contribution: float       # 0–1 contribution to session score
     artifact_probability: float
     channel_attention: dict[str, float]
     dominant_frequency_hz: float
-    band_powers: dict[str, float]
+    band_powers: dict[str, float]        # averaged across channels
+    per_channel_powers: dict[str, dict[str, float]]  # per-channel band powers
+    frontal_alpha_asymmetry: float       # per-epoch FAA
     confidence: float
 
 
 @dataclass
 class ClinicalFlag:
-    flag_type: str          # SEIZURE_EVENT | INTERICTAL_DISCHARGE | ARTIFACT | SLOWING
+    flag_type: str          # DEPRESSIVE_PATTERN | FRONTAL_ASYMMETRY | ALPHA_SUPPRESSION | SLEEP_DISRUPTION
     severity: str           # HIGH | MEDIUM | LOW
     onset_sec: float
     duration_sec: float
@@ -43,11 +68,26 @@ class ClinicalFlag:
 
 
 @dataclass
+class BiomarkerSummary:
+    alpha_power: float
+    beta_power: float
+    theta_power: float
+    delta_power: float
+    gamma_power: float
+    frontal_alpha_asymmetry: float
+    alpha_beta_ratio: float
+    theta_beta_ratio: float
+
+
+@dataclass
 class MANAS1Response:
     model_version: str
     study_id: int
     epochs: list[EpochAnalysis]
-    overall_seizure_probability: float
+    depression_severity_score: float      # 0–27 PHQ-9 equivalent
+    depression_risk_level: str            # Minimal/Mild/Moderate/Moderately Severe/Severe
+    frontal_alpha_asymmetry: float        # session-level FAA
+    biomarkers: BiomarkerSummary
     clinical_flags: list[ClinicalFlag]
     background_rhythm: str
     clinical_impression: str
@@ -55,7 +95,7 @@ class MANAS1Response:
 
 
 class MANAS1MockService:
-    MODEL_VERSION = "manas1-mock-v0.1"
+    MODEL_VERSION = "manas1-depression-v0.1"
 
     def __init__(self):
         self.latency_ms = settings.MANAS1_MOCK_LATENCY_MS
@@ -68,27 +108,16 @@ class MANAS1MockService:
     ) -> MANAS1Response:
         t_start = time.time()
         n_epochs = len(preprocessed.epochs)
-
-        # Decide on a seizure window — one contiguous block
         rng = np.random.default_rng(study_id % 9999)
-        has_seizure = preprocessed.duration_sec > 30
-        seizure_epoch_start = None
-        seizure_epoch_end = None
 
-        if has_seizure:
-            # Place seizure roughly 40% into the recording
-            mid_epoch = int(n_epochs * 0.40)
-            seizure_epoch_start = max(0, mid_epoch - 1)
-            seizure_epoch_end = min(n_epochs - 1, mid_epoch + 4)
+        # Decide depression severity for this recording
+        has_depression = preprocessed.duration_sec > 30
+        # Depression is sustained — affects the entire recording, not a window
+        base_severity = rng.uniform(0.4, 0.85) if has_depression else rng.uniform(0.05, 0.25)
 
         epoch_results: list[EpochAnalysis] = []
 
         for i, epoch in enumerate(preprocessed.epochs):
-            in_seizure = (
-                seizure_epoch_start is not None
-                and seizure_epoch_start <= i <= seizure_epoch_end
-            )
-
             result = self._analyze_epoch(
                 epoch_data=epoch,
                 epoch_index=i,
@@ -97,30 +126,46 @@ class MANAS1MockService:
                 band_powers=preprocessed.band_powers_per_epoch[i],
                 dominant_freq=preprocessed.dominant_freqs_per_epoch[i],
                 channel_names=preprocessed.channel_names,
-                is_seizure=in_seizure,
+                base_severity=base_severity,
                 rng=rng,
+                sample_rate=preprocessed.original_sample_rate,
             )
             epoch_results.append(result)
 
             if progress_callback:
                 await progress_callback(i + 1, n_epochs)
 
-            # Simulate inference latency
             await asyncio.sleep(self.latency_ms / 1000.0)
 
-        # Aggregate
-        seizure_probs = [e.seizure_probability for e in epoch_results]
-        # Smooth with a 3-epoch rolling max
-        smoothed = [
-            max(seizure_probs[max(0, i - 1): i + 2])
-            for i in range(len(seizure_probs))
-        ]
-        overall_prob = float(np.percentile(smoothed, 95))
+        # ── Session-level aggregation ──────────────────────────────────────
+        contributions = [e.depression_contribution for e in epoch_results]
+        avg_contribution = float(np.mean(contributions))
 
+        # Map 0–1 contribution to 0–27 PHQ-9 scale
+        depression_score = round(avg_contribution * 27, 1)
+        risk_level = phq9_risk_level(depression_score)
+
+        # Session-level FAA (average across epochs)
+        session_faa = float(np.mean([e.frontal_alpha_asymmetry for e in epoch_results]))
+
+        # Session biomarkers (average band powers)
         avg_band_powers = self._average_band_powers(preprocessed.band_powers_per_epoch)
+        biomarkers = BiomarkerSummary(
+            alpha_power=avg_band_powers.get("alpha", 0),
+            beta_power=avg_band_powers.get("beta", 0),
+            theta_power=avg_band_powers.get("theta", 0),
+            delta_power=avg_band_powers.get("delta", 0),
+            gamma_power=avg_band_powers.get("gamma", 0),
+            frontal_alpha_asymmetry=session_faa,
+            alpha_beta_ratio=avg_band_powers.get("alpha", 0) / max(avg_band_powers.get("beta", 0.01), 0.01),
+            theta_beta_ratio=avg_band_powers.get("theta", 0) / max(avg_band_powers.get("beta", 0.01), 0.01),
+        )
+
         background_rhythm = self._infer_background_rhythm(avg_band_powers)
-        clinical_flags = self._generate_clinical_flags(epoch_results, preprocessed.channel_names)
-        clinical_impression = self._generate_clinical_impression(clinical_flags, overall_prob, background_rhythm)
+        clinical_flags = self._generate_clinical_flags(epoch_results, biomarkers, session_faa)
+        clinical_impression = self._generate_clinical_impression(
+            clinical_flags, depression_score, risk_level, background_rhythm, biomarkers
+        )
 
         processing_time_ms = int((time.time() - t_start) * 1000)
 
@@ -128,7 +173,10 @@ class MANAS1MockService:
             model_version=self.MODEL_VERSION,
             study_id=study_id,
             epochs=epoch_results,
-            overall_seizure_probability=overall_prob,
+            depression_severity_score=depression_score,
+            depression_risk_level=risk_level,
+            frontal_alpha_asymmetry=session_faa,
+            biomarkers=biomarkers,
             clinical_flags=clinical_flags,
             background_rhythm=background_rhythm,
             clinical_impression=clinical_impression,
@@ -144,46 +192,59 @@ class MANAS1MockService:
         band_powers: dict,
         dominant_freq: float,
         channel_names: list[str],
-        is_seizure: bool,
+        base_severity: float,
         rng: np.random.Generator,
+        sample_rate: int,
     ) -> EpochAnalysis:
-        # Seizure probability via Beta distribution
-        if is_seizure:
-            base_prob = rng.beta(8, 2)  # skewed high: mean ~0.80
-        else:
-            base_prob = rng.beta(2, 8)  # skewed low: mean ~0.20
+        # Per-channel band powers
+        per_ch_powers = compute_band_powers_per_channel(epoch_data, sample_rate, channel_names)
+        faa = compute_frontal_alpha_asymmetry(per_ch_powers, channel_names)
 
-        # Artifact detection: look for single-sample transient spikes (electrode pops)
-        # Use normalized diff rather than amplitude — seizure has sustained high amplitude,
-        # artefacts have abrupt single-sample jumps
+        # Depression contribution: weighted combination of biomarkers + mock noise
+        # Negative FAA → depression; high theta/beta → depression; low alpha → depression
+        alpha = band_powers.get("alpha", 0.3)
+        theta = band_powers.get("theta", 0.2)
+        beta = band_powers.get("beta", 0.2)
+
+        faa_component = float(np.clip(-faa * 2, -1, 1))  # negative FAA → positive component
+        alpha_suppression = float(np.clip(1.0 - alpha * 3, 0, 1))  # low alpha → high contribution
+        theta_beta_elevation = float(np.clip((theta / max(beta, 0.01) - 1.0) * 0.5, 0, 1))
+
+        raw_contribution = (
+            0.35 * faa_component +
+            0.25 * alpha_suppression +
+            0.20 * theta_beta_elevation +
+            0.20 * base_severity
+        )
+        noise = rng.normal(0, 0.05)
+        depression_contribution = float(np.clip(raw_contribution + noise, 0.0, 1.0))
+
+        # Artifact detection (transient jump detection)
         diff = np.abs(np.diff(epoch_data, axis=1))
         max_jump = float(np.max(diff)) if diff.size > 0 else 0.0
-        # A genuine artefact pop exceeds 50× median jump
         median_jump = float(np.median(diff)) + 1e-8
         artifact_prob = float(np.clip((max_jump / median_jump - 50) / 200, 0.0, 1.0))
-        # Only suppress seizure prob for clearly artefactual epochs, not high-amplitude seizures
-        if artifact_prob > 0.8 and not is_seizure:
-            base_prob *= 0.4
 
-        seizure_prob = float(np.clip(base_prob, 0.0, 1.0))
-
+        # Channel attention: frontal-weighted for depression
         channel_attention = self._generate_channel_attention(
-            epoch_data, channel_names, is_seizure, rng
+            epoch_data, channel_names, base_severity > 0.3, rng
         )
 
-        # Confidence: lower during artifacts or borderline probabilities
-        dist_from_boundary = abs(seizure_prob - 0.5)
+        # Confidence
+        dist_from_boundary = abs(depression_contribution - 0.5)
         confidence = float(np.clip(0.6 + dist_from_boundary * 0.7, 0.0, 1.0))
 
         return EpochAnalysis(
             epoch_index=epoch_index,
             start_time_sec=start_time_sec,
             end_time_sec=start_time_sec + epoch_duration_sec,
-            seizure_probability=seizure_prob,
+            depression_contribution=depression_contribution,
             artifact_probability=artifact_prob,
             channel_attention=channel_attention,
             dominant_frequency_hz=dominant_freq,
             band_powers=band_powers,
+            per_channel_powers=per_ch_powers,
+            frontal_alpha_asymmetry=faa,
             confidence=confidence,
         )
 
@@ -191,110 +252,84 @@ class MANAS1MockService:
         self,
         epoch_data: np.ndarray,
         channel_names: list[str],
-        is_seizure: bool,
+        is_depressed: bool,
         rng: np.random.Generator,
     ) -> dict[str, float]:
-        # Base: channel variance as proxy for "interestingness"
         variance = np.var(epoch_data, axis=1)
         weights = variance / (variance.sum() + 1e-8)
 
-        if is_seizure:
-            # Boost temporal channels to simulate focal detection
+        if is_depressed:
             for i, ch in enumerate(channel_names):
-                if ch in TEMPORAL_CHANNELS:
-                    weights[i] *= rng.uniform(3.0, 6.0)
+                if ch in FRONTAL_CHANNELS:
+                    weights[i] *= rng.uniform(2.5, 5.0)
 
-        # Normalize to sum=1
         weights = weights / (weights.sum() + 1e-8)
         return {ch: float(w) for ch, w in zip(channel_names, weights)}
 
     def _generate_clinical_flags(
         self,
         epochs: list[EpochAnalysis],
-        channel_names: list[str],
+        biomarkers: BiomarkerSummary,
+        session_faa: float,
     ) -> list[ClinicalFlag]:
         flags: list[ClinicalFlag] = []
+        duration = epochs[-1].end_time_sec if epochs else 0.0
 
-        # Find contiguous high-probability seizure epochs (>= 0.55)
-        in_event = False
-        event_start = 0.0
-        event_epochs: list[EpochAnalysis] = []
-
-        for ep in epochs:
-            if ep.seizure_probability >= 0.55:
-                if not in_event:
-                    in_event = True
-                    event_start = ep.start_time_sec
-                    event_epochs = []
-                event_epochs.append(ep)
-            else:
-                if in_event and len(event_epochs) >= 2:
-                    flags.append(self._build_seizure_flag(event_epochs, channel_names))
-                in_event = False
-                event_epochs = []
-
-        if in_event and len(event_epochs) >= 2:
-            flags.append(self._build_seizure_flag(event_epochs, channel_names))
-
-        # Interictal discharges: single high-probability epochs
-        for ep in epochs:
-            if 0.45 <= ep.seizure_probability < 0.55:
-                top_channels = sorted(
-                    ep.channel_attention.items(), key=lambda x: x[1], reverse=True
-                )[:3]
-                flags.append(ClinicalFlag(
-                    flag_type="INTERICTAL_DISCHARGE",
-                    severity="MEDIUM",
-                    onset_sec=ep.start_time_sec,
-                    duration_sec=ep.end_time_sec - ep.start_time_sec,
-                    channels_involved=[c for c, _ in top_channels],
-                    description=f"Possible interictal epileptiform discharge at {ep.start_time_sec:.1f}s",
-                ))
-
-        # Background slowing
-        avg_delta = np.mean([e.band_powers.get("delta", 0) for e in epochs])
-        if avg_delta > 0.35:
+        if session_faa < -0.1:
+            severity = "HIGH" if session_faa < -0.3 else "MEDIUM"
             flags.append(ClinicalFlag(
-                flag_type="SLOWING",
+                flag_type="FRONTAL_ASYMMETRY",
+                severity=severity,
+                onset_sec=0.0,
+                duration_sec=duration,
+                channels_involved=["F3", "F4", "Fp1", "Fp2"],
+                description=(
+                    f"Significant frontal alpha asymmetry detected (FAA = {session_faa:.3f}). "
+                    f"Left frontal alpha suppression is a validated biomarker for depressive states."
+                ),
+            ))
+
+        if biomarkers.alpha_power < 0.20:
+            flags.append(ClinicalFlag(
+                flag_type="ALPHA_SUPPRESSION",
                 severity="MEDIUM",
                 onset_sec=0.0,
-                duration_sec=epochs[-1].end_time_sec if epochs else 0.0,
+                duration_sec=duration,
+                channels_involved=["O1", "O2", "P3", "P4"],
+                description=(
+                    f"Reduced overall alpha power ({biomarkers.alpha_power:.0%}). "
+                    f"Alpha suppression is associated with increased rumination and depressive cognition."
+                ),
+            ))
+
+        if biomarkers.theta_beta_ratio > 2.0:
+            flags.append(ClinicalFlag(
+                flag_type="DEPRESSIVE_PATTERN",
+                severity="MEDIUM",
+                onset_sec=0.0,
+                duration_sec=duration,
+                channels_involved=["Fz", "Cz", "F3", "F4"],
+                description=(
+                    f"Elevated theta/beta ratio ({biomarkers.theta_beta_ratio:.2f}). "
+                    f"This pattern suggests cortical hypoarousal consistent with depressive states."
+                ),
+            ))
+
+        if biomarkers.delta_power > 0.35:
+            flags.append(ClinicalFlag(
+                flag_type="SLEEP_DISRUPTION",
+                severity="LOW",
+                onset_sec=0.0,
+                duration_sec=duration,
                 channels_involved=[],
-                description="Diffuse background slowing with excess delta activity",
+                description=(
+                    f"Excess delta activity ({biomarkers.delta_power:.0%}). "
+                    f"May indicate sleep disruption or excessive daytime sleepiness, "
+                    f"commonly associated with depressive episodes."
+                ),
             ))
 
         return flags
-
-    def _build_seizure_flag(
-        self, event_epochs: list[EpochAnalysis], channel_names: list[str]
-    ) -> ClinicalFlag:
-        onset = event_epochs[0].start_time_sec
-        offset = event_epochs[-1].end_time_sec
-        duration = offset - onset
-
-        # Aggregate attention across seizure epochs
-        combined_attention: dict[str, float] = {}
-        for ep in event_epochs:
-            for ch, w in ep.channel_attention.items():
-                combined_attention[ch] = combined_attention.get(ch, 0) + w
-        top_channels = sorted(combined_attention.items(), key=lambda x: x[1], reverse=True)[:4]
-        involved = [c for c, _ in top_channels]
-
-        is_temporal = any(c in TEMPORAL_CHANNELS for c in involved)
-        laterality = "left" if any(c.endswith(("3", "7")) for c in involved) else "right"
-
-        return ClinicalFlag(
-            flag_type="SEIZURE_EVENT",
-            severity="HIGH",
-            onset_sec=onset,
-            duration_sec=duration,
-            channels_involved=involved,
-            description=(
-                f"Focal ictal discharge with {laterality} {'temporal' if is_temporal else 'fronto-temporal'} "
-                f"predominance. Onset at {onset:.1f}s, duration {duration:.0f}s. "
-                f"Maximum amplitude in channels: {', '.join(involved[:2])}."
-            ),
-        )
 
     def _average_band_powers(self, band_powers_list: list[dict]) -> dict[str, float]:
         if not band_powers_list:
@@ -319,43 +354,56 @@ class MANAS1MockService:
     def _generate_clinical_impression(
         self,
         flags: list[ClinicalFlag],
-        overall_prob: float,
+        depression_score: float,
+        risk_level: str,
         background_rhythm: str,
+        biomarkers: BiomarkerSummary,
     ) -> str:
-        seizure_flags = [f for f in flags if f.flag_type == "SEIZURE_EVENT"]
-        interictal_flags = [f for f in flags if f.flag_type == "INTERICTAL_DISCHARGE"]
-
         lines = [f"Background: {background_rhythm}."]
 
-        if seizure_flags:
-            sf = seizure_flags[0]
+        lines.append(
+            f"Depression severity score: {depression_score:.1f}/27 "
+            f"(PHQ-9 equivalent: {risk_level})."
+        )
+
+        if biomarkers.frontal_alpha_asymmetry < -0.1:
             lines.append(
-                f"The EEG demonstrates focal epileptiform activity arising from the "
-                f"{sf.channels_involved[0] if sf.channels_involved else 'temporal'} region. "
-                f"A seizure event was identified at {sf.onset_sec:.1f}s with a duration of "
-                f"{sf.duration_sec:.0f}s."
+                f"Frontal alpha asymmetry (FAA = {biomarkers.frontal_alpha_asymmetry:.3f}) "
+                f"indicates left frontal hypoactivation, a validated EEG biomarker for depression."
             )
+
+        asymmetry_flags = [f for f in flags if f.flag_type == "FRONTAL_ASYMMETRY"]
+        pattern_flags = [f for f in flags if f.flag_type == "DEPRESSIVE_PATTERN"]
+
+        if asymmetry_flags or pattern_flags:
             lines.append(
-                f"Overall seizure probability: {overall_prob:.0%} (MANAS-1 model score)."
+                f"EEG biomarkers suggest {risk_level.lower()} depressive pattern. "
+                f"Alpha/beta ratio: {biomarkers.alpha_beta_ratio:.2f}, "
+                f"Theta/beta ratio: {biomarkers.theta_beta_ratio:.2f}."
             )
-        elif interictal_flags:
+
+        if depression_score < 5:
             lines.append(
-                f"Interictal epileptiform discharges noted at {len(interictal_flags)} timepoint(s). "
-                f"No definite ictal pattern identified in this recording."
+                "EEG biomarker profile is within normal range. "
+                "No significant indicators of depressive pathology."
             )
+        elif depression_score < 10:
             lines.append(
-                f"Overall seizure probability: {overall_prob:.0%} (MANAS-1 model score). "
-                "Clinical correlation recommended."
+                "Mild EEG biomarker changes noted. Clinical correlation with "
+                "standardised questionnaires (PHQ-9, BDI-II) recommended."
             )
         else:
             lines.append(
-                f"No definite epileptiform activity identified. "
-                f"Overall seizure probability: {overall_prob:.0%} (MANAS-1 model score)."
+                "Significant EEG biomarker changes consistent with depressive pattern. "
+                "Recommend clinical assessment and monitoring. "
+                "Consider longitudinal EEG tracking to evaluate treatment response."
             )
 
         lines.append(
-            "IMPORTANT: This is an AI-assisted pre-read. All findings require review "
-            "and confirmation by a qualified neurologist before clinical use."
+            "IMPORTANT: This is an AI-assisted depression screening tool. All findings "
+            "require review and confirmation by a qualified psychiatrist or neurologist. "
+            "EEG biomarkers should be interpreted alongside clinical interview and "
+            "standardised rating scales."
         )
 
         return " ".join(lines)

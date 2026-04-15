@@ -49,8 +49,7 @@ class SyntheticEEGResult:
     channel_names: list[str]
     sample_rate: int
     duration_sec: float
-    seizure_onset_sec: float | None
-    seizure_duration_sec: float | None
+    has_depression_pattern: bool
 
 
 class SyntheticEEGGenerator:
@@ -59,9 +58,7 @@ class SyntheticEEGGenerator:
 
     def generate(
         self,
-        include_seizure: bool = True,
-        seizure_onset_sec: float = 45.0,
-        seizure_duration_sec: float = 20.0,
+        include_depression: bool = True,
         seed: int = 42,
     ) -> SyntheticEEGResult:
         rng = np.random.default_rng(seed)
@@ -70,8 +67,8 @@ class SyntheticEEGGenerator:
 
         data = self._generate_background(t, rng)
 
-        if include_seizure:
-            data = self._inject_seizure(data, t, seizure_onset_sec, seizure_duration_sec, rng)
+        if include_depression:
+            data = self._inject_depression_pattern(data, t, rng)
 
         data = self._inject_artifacts(data, t, rng)
 
@@ -80,8 +77,7 @@ class SyntheticEEGGenerator:
             channel_names=CHANNELS_10_20,
             sample_rate=self.SAMPLE_RATE,
             duration_sec=self.DURATION_SEC,
-            seizure_onset_sec=seizure_onset_sec if include_seizure else None,
-            seizure_duration_sec=seizure_duration_sec if include_seizure else None,
+            has_depression_pattern=include_depression,
         )
 
     def _generate_background(self, t: np.ndarray, rng: np.random.Generator) -> np.ndarray:
@@ -115,47 +111,62 @@ class SyntheticEEGGenerator:
 
         return data
 
-    def _inject_seizure(
+    def _inject_depression_pattern(
         self,
         data: np.ndarray,
         t: np.ndarray,
-        onset_sec: float,
-        duration_sec: float,
         rng: np.random.Generator,
     ) -> np.ndarray:
+        """
+        Inject depression-associated EEG patterns across the entire recording:
+        1. Left frontal alpha suppression (FAA indicator)
+        2. Elevated frontal theta
+        3. Overall mild alpha reduction
+        These are sustained, subtle changes — not sudden events.
+        """
         sr = self.SAMPLE_RATE
-        onset_idx = int(onset_sec * sr)
-        end_idx = min(int((onset_sec + duration_sec) * sr), data.shape[1])
+        n_samples = data.shape[1]
 
-        # Spatial weights: focal on T3/T4 left temporal
-        focus = np.array(CHANNEL_COORDS["T3"])
-        weights = np.zeros(len(CHANNELS_10_20))
+        # Left frontal channels: suppress alpha by 40-60%
+        left_frontal = {"Fp1": 0, "F3": 2, "F7": 10}
+        for ch, idx in left_frontal.items():
+            if idx < data.shape[0]:
+                # Remove a portion of alpha from left frontal
+                alpha_freq = 9.5 + rng.uniform(-0.5, 0.5)
+                alpha_amp = CHANNEL_AMPLITUDE.get(ch, 35) * ALPHA_WEIGHT.get(ch, 0.1) * 0.6
+                suppression = rng.uniform(0.4, 0.6)
+                alpha_removal = -alpha_amp * suppression * np.sin(
+                    2 * np.pi * alpha_freq * t + rng.uniform(0, 2 * np.pi)
+                )
+                data[idx] += alpha_removal
+
+        # Elevated frontal theta (5-7 Hz) across frontal channels
+        frontal_indices = {
+            "Fp1": 0, "Fp2": 1, "F3": 2, "F4": 3,
+            "F7": 10, "F8": 11, "Fz": 16,
+        }
+        for ch, idx in frontal_indices.items():
+            if idx < data.shape[0]:
+                theta_freq = rng.uniform(5.0, 7.0)
+                theta_amp = CHANNEL_AMPLITUDE.get(ch, 35) * rng.uniform(0.2, 0.4)
+                theta_signal = theta_amp * np.sin(
+                    2 * np.pi * theta_freq * t + rng.uniform(0, 2 * np.pi)
+                )
+                # Modulate with slow envelope for realism
+                envelope = 0.7 + 0.3 * np.sin(2 * np.pi * 0.05 * t + rng.uniform(0, 2 * np.pi))
+                data[idx] += theta_signal * envelope
+
+        # Mild global alpha suppression (10-20% across all channels)
+        global_suppression = rng.uniform(0.10, 0.20)
         for i, ch in enumerate(CHANNELS_10_20):
-            coord = np.array(CHANNEL_COORDS.get(ch, (0, 0, 0)))
-            dist = np.linalg.norm(coord - focus)
-            weights[i] = np.exp(-(dist ** 2) / (2 * 0.4 ** 2))
-
-        phase1_end = min(onset_idx + int(4 * sr), end_idx)
-        phase2_end = min(phase1_end + int((duration_sec - 7) * sr), end_idx)
-        phase3_end = end_idx
-
-        # Phase 1: fast ripples 70 Hz
-        t_p1 = t[onset_idx:phase1_end] - onset_sec
-        for i, ch in enumerate(CHANNELS_10_20):
-            amp = weights[i] * 50
-            fast = amp * np.sin(2 * np.pi * 70 * t_p1 + rng.uniform(0, 2 * np.pi))
-            data[i, onset_idx:phase1_end] += fast
-
-        # Phase 2: rhythmic spike-wave 3.5 Hz building amplitude
-        t_p2 = t[phase1_end:phase2_end] - (onset_sec + 4)
-        ramp = np.linspace(1.0, 3.0, phase2_end - phase1_end)
-        for i, ch in enumerate(CHANNELS_10_20):
-            amp = weights[i] * 80
-            spike_wave = amp * ramp * np.sin(2 * np.pi * 3.5 * t_p2 + rng.uniform(0, 2 * np.pi))
-            data[i, phase1_end:phase2_end] += spike_wave
-
-        # Phase 3: post-ictal attenuation
-        data[:, phase2_end:phase3_end] *= 0.2
+            alpha_w = ALPHA_WEIGHT.get(ch, 0.1)
+            if alpha_w > 0.2:  # only affect channels that have significant alpha
+                alpha_freq = 9.5 + rng.uniform(-0.3, 0.3)
+                alpha_amp = CHANNEL_AMPLITUDE.get(ch, 35) * alpha_w * 0.6
+                reduction = -alpha_amp * global_suppression * np.sin(
+                    2 * np.pi * alpha_freq * t + rng.uniform(0, 2 * np.pi)
+                )
+                data[i] += reduction
 
         return data
 

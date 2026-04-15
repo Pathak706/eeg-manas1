@@ -23,11 +23,11 @@ export default function EEGWaveformViewer({ studyId, durationSec, epochs, onEpoc
     placeholderData: (prev: DisplayEEGData | undefined) => prev,
   })
 
-  // Seizure regions for shape overlays
-  const seizureShapes = useMemo(() => {
+  // Depression-relevant region overlays (high contribution epochs)
+  const depressionShapes = useMemo(() => {
     if (!epochs) return []
     return epochs
-      .filter((e) => e.seizure_probability > 0.55)
+      .filter((e) => e.depression_contribution > 0.6)
       .map((e) => ({
         type: 'rect' as const,
         x0: e.start_time_sec,
@@ -35,7 +35,7 @@ export default function EEGWaveformViewer({ studyId, durationSec, epochs, onEpoc
         yref: 'paper' as const,
         y0: 0,
         y1: 1,
-        fillcolor: 'rgba(220, 38, 38, 0.08)',
+        fillcolor: 'rgba(37, 99, 235, 0.06)',
         line: { width: 0 },
       }))
   }, [epochs])
@@ -138,7 +138,7 @@ export default function EEGWaveformViewer({ studyId, durationSec, epochs, onEpoc
                 showgrid: false,
                 zeroline: false,
               },
-              shapes: seizureShapes,
+              shapes: depressionShapes,
             }}
             config={{ responsive: true, displayModeBar: false }}
             style={{ width: '100%' }}
@@ -148,8 +148,8 @@ export default function EEGWaveformViewer({ studyId, durationSec, epochs, onEpoc
 
       <div className="px-4 pb-2 flex items-center gap-3 text-xs text-gray-400">
         <span className="flex items-center gap-1">
-          <span className="inline-block w-3 h-3 bg-red-100 border border-red-200 rounded-sm" />
-          Seizure probability &gt; 55%
+          <span className="inline-block w-3 h-3 bg-blue-100 border border-blue-200 rounded-sm" />
+          High depression contribution (&gt;60%)
         </span>
         <span>· Amplitude offset: 150 μV per channel</span>
       </div>

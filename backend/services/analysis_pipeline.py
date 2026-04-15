@@ -84,10 +84,24 @@ class AnalysisPipeline:
         )
 
         # Step 5: Persist results
+        biomarkers_dict = {
+            "alpha_power": response.biomarkers.alpha_power,
+            "beta_power": response.biomarkers.beta_power,
+            "theta_power": response.biomarkers.theta_power,
+            "delta_power": response.biomarkers.delta_power,
+            "gamma_power": response.biomarkers.gamma_power,
+            "frontal_alpha_asymmetry": response.biomarkers.frontal_alpha_asymmetry,
+            "alpha_beta_ratio": response.biomarkers.alpha_beta_ratio,
+            "theta_beta_ratio": response.biomarkers.theta_beta_ratio,
+        }
+
         analysis = AnalysisResult(
             study_id=study.id,
             model_version=response.model_version,
-            overall_seizure_probability=response.overall_seizure_probability,
+            depression_severity_score=response.depression_severity_score,
+            depression_risk_level=response.depression_risk_level,
+            frontal_alpha_asymmetry=response.frontal_alpha_asymmetry,
+            biomarkers_json=json.dumps(biomarkers_dict),
             clinical_impression=response.clinical_impression,
             background_rhythm=response.background_rhythm,
             clinical_flags=json.dumps([
@@ -104,7 +118,7 @@ class AnalysisPipeline:
             processing_time_ms=response.processing_time_ms,
         )
         self.db.add(analysis)
-        self.db.flush()  # get analysis.id
+        self.db.flush()
 
         epoch_rows = [
             EpochResult(
@@ -112,11 +126,12 @@ class AnalysisPipeline:
                 epoch_index=ep.epoch_index,
                 start_time_sec=ep.start_time_sec,
                 end_time_sec=ep.end_time_sec,
-                seizure_probability=ep.seizure_probability,
+                depression_contribution=ep.depression_contribution,
                 artifact_probability=ep.artifact_probability,
                 channel_attention=json.dumps(ep.channel_attention),
                 dominant_frequency_hz=ep.dominant_frequency_hz,
                 band_powers=json.dumps(ep.band_powers),
+                frontal_alpha_asymmetry=ep.frontal_alpha_asymmetry,
                 confidence=ep.confidence,
             )
             for ep in response.epochs

@@ -1,105 +1,87 @@
 """
-Clinical NLP Extractor.
+Clinical NLP Extractor — Depression Assessment.
 
-Parses structured clinical data from free-text EEG report markdown.
+Parses structured clinical data from free-text EEG/psychiatric report markdown.
 Uses pure regex + keyword matching — no external NLP models required.
 """
 import re
 from dataclasses import dataclass, field
 
-# All 10-20 EEG channel names for detection
 CHANNELS_10_20 = {
     "Fp1", "Fp2", "F3", "F4", "C3", "C4", "P3", "P4",
     "O1", "O2", "F7", "F8", "T3", "T4", "T5", "T6",
     "Fz", "Cz", "Pz",
 }
-TEMPORAL_CHANNELS = {"T3", "T4", "F7", "F8", "T5", "T6"}
+FRONTAL_CHANNELS = {"Fp1", "Fp2", "F3", "F4", "F7", "F8"}
 
-# ── Seizure probability keyword tiers ──────────────────────────────────────
+# ── Depression severity keyword tiers ──────────────────────────────────────
 
-_HIGH_SEIZURE = [
-    r"definite seizure", r"confirmed ictal", r"seizure recorded",
-    r"ictal activity", r"epileptic seizure", r"status epilepticus",
-    r"ictal discharge", r"electrographic seizure",
+_SEVERE_DEPRESSION = [
+    r"severe depression", r"major depressive", r"PHQ.?9.*(?:2[0-7]|severe)",
+    r"suicidal ideation", r"severe.*depressive", r"treatment.resistant",
+    r"severe.*MDD", r"melancholic",
 ]
-_PROBABLE_SEIZURE = [
-    r"likely epileptiform", r"probable seizure", r"high suspicion",
-    r"highly suggestive", r"probable ictal", r"consistent with seizure",
-    r"epileptiform discharge", r"spike.wave", r"polyspike",
+_MODERATE_DEPRESSION = [
+    r"moderate depression", r"moderately severe", r"PHQ.?9.*(?:1[0-9]|moderate)",
+    r"persistent.*depressive", r"significant.*depression", r"MDD",
+    r"major depressive disorder",
 ]
-_POSSIBLE_SEIZURE = [
-    r"possible seizure", r"cannot exclude", r"borderline",
-    r"cannot rule out", r"suspicious for", r"possible epileptiform",
-    r"interictal discharge", r"sharp wave", r"suspicious discharge",
+_MILD_DEPRESSION = [
+    r"mild depression", r"subthreshold", r"dysthymi", r"subclinical",
+    r"PHQ.?9.*(?:[5-9]|mild)", r"mild.*depressive", r"low mood",
+    r"adjustment disorder",
 ]
-_NO_SEIZURE = [
-    r"no epileptiform", r"no seizure", r"normal eeg",
-    r"no ictal", r"within normal limits", r"unremarkable eeg",
-    r"no abnormality", r"no definite epileptiform",
+_NO_DEPRESSION = [
+    r"no depression", r"euthymic", r"remission", r"normal mood",
+    r"not depressed", r"within normal", r"no.*depressive",
+    r"PHQ.?9.*(?:[0-4]|minimal)", r"asymptomatic",
 ]
 
 # ── Band power keyword mapping ─────────────────────────────────────────────
 
 _BAND_KEYWORDS = {
-    "delta": [r"excess delta", r"delta slowing", r"delta activity", r"slow wave", r"delta waves"],
-    "theta": [r"theta activity", r"theta slowing", r"excess theta", r"theta waves"],
-    "alpha": [r"normal alpha", r"posterior alpha", r"alpha rhythm", r"alpha activity", r"well.organised.*alpha"],
-    "beta": [r"beta activity", r"excess beta", r"fast activity", r"beta waves"],
+    "delta": [r"excess delta", r"delta slowing", r"delta activity", r"slow wave"],
+    "theta": [r"theta activity", r"theta slowing", r"excess theta", r"theta elevation", r"frontal theta"],
+    "alpha": [r"alpha.*suppress", r"reduced alpha", r"alpha.*asymmetr", r"alpha rhythm", r"alpha activity"],
+    "beta": [r"beta activity", r"excess beta", r"fast activity"],
     "gamma": [r"gamma activity", r"high.frequency activity"],
 }
 
-# ── Timestamp patterns ────────────────────────────────────────────────────
+# ── Depression biomarker patterns ──────────────────────────────────────────
 
-_TS_PATTERNS = [
-    # "at 45 seconds" / "at 45s" / "at 45 sec"
-    re.compile(r"at\s+(\d+(?:\.\d+)?)\s*s(?:ec(?:ond)?s?)?", re.IGNORECASE),
-    # "onset at 01:23" (mm:ss)
-    re.compile(r"onset\s+(?:at\s+)?(\d{1,2}):(\d{2})", re.IGNORECASE),
-    # "from 30 to 48 seconds"
-    re.compile(r"from\s+(\d+(?:\.\d+)?)\s+to\s+(\d+(?:\.\d+)?)\s*s(?:ec)?", re.IGNORECASE),
-    # "beginning at 30 seconds"
-    re.compile(r"beginning\s+at\s+(\d+(?:\.\d+)?)\s*s(?:ec)?", re.IGNORECASE),
-]
-
-# ── Event type detection ──────────────────────────────────────────────────
-
-_EVENT_KEYWORDS = {
-    "SEIZURE_EVENT": [
-        r"\bseizure\b", r"\bictal\b", r"\bictus\b", r"\bconvuls",
-    ],
-    "INTERICTAL_DISCHARGE": [
-        r"interictal", r"epileptiform discharge", r"spike.wave", r"sharp wave",
-        r"polyspike", r"\bspike\b",
-    ],
-    "SLOWING": [
-        r"\bslowing\b", r"slow activity", r"delta slowing", r"theta slowing",
-        r"diffuse.*slow", r"slow.*background",
-    ],
-    "ARTIFACT": [
-        r"\bartifact\b", r"muscle artifact", r"eye.blink", r"movement artifact",
-    ],
+_BIOMARKER_PATTERNS = {
+    "alpha_asymmetry": [r"alpha.*asymmetr", r"frontal.*asymmetr", r"FAA", r"left.*frontal.*suppress"],
+    "theta_elevation": [r"theta.*elevat", r"frontal.*theta", r"excess.*theta", r"theta.beta.*ratio"],
+    "alpha_suppression": [r"alpha.*suppress", r"reduced.*alpha", r"low.*alpha", r"alpha.*deficit"],
+    "sleep_disruption": [r"sleep.*disrupt", r"insomnia", r"hypersomnia", r"excess.*delta", r"sleep.*disturb"],
 }
 
-# ── Duration extraction ────────────────────────────────────────────────────
-
 _DURATION_PATTERNS = [
-    re.compile(r"(\d+(?:\.\d+)?)\s*(?:minute|min)(?:s)?(?:\s+(?:\d+(?:\.\d+)?)\s*s(?:ec)?s?)?",
-               re.IGNORECASE),
+    re.compile(r"(\d+(?:\.\d+)?)\s*(?:minute|min)s?", re.IGNORECASE),
     re.compile(r"recording.*?(\d+(?:\.\d+)?)\s*(?:minute|min)", re.IGNORECASE),
-    re.compile(r"(\d+(?:\.\d+)?)\s*(?:minute|min).*?recording", re.IGNORECASE),
     re.compile(r"duration.*?(\d+(?:\.\d+)?)\s*(?:minute|min)", re.IGNORECASE),
 ]
 
 
 @dataclass
 class ClinicalExtraction:
-    overall_seizure_probability: float
+    depression_severity_score: float      # 0–27 PHQ-9 equivalent
+    depression_risk_level: str
     background_rhythm: str
     clinical_flags: list[dict] = field(default_factory=list)
     recording_duration_sec: float = 120.0
     band_powers: dict[str, float] = field(default_factory=dict)
-    source_confidence: str = "LOW"   # HIGH | MEDIUM | LOW
+    frontal_alpha_asymmetry: float = 0.0
+    source_confidence: str = "LOW"
     extracted_fields: dict = field(default_factory=dict)
+
+
+def _phq9_risk_level(score: float) -> str:
+    if score <= 4: return "Minimal"
+    if score <= 9: return "Mild"
+    if score <= 14: return "Moderate"
+    if score <= 19: return "Moderately Severe"
+    return "Severe"
 
 
 class ClinicalNLPExtractor:
@@ -107,93 +89,84 @@ class ClinicalNLPExtractor:
     def extract(self, text: str) -> ClinicalExtraction:
         lower = text.lower()
 
-        seizure_prob, prob_tier = self._extract_seizure_probability(lower)
+        score, tier = self._extract_depression_score(lower)
+        risk_level = _phq9_risk_level(score)
         background_rhythm = self._extract_background_rhythm(text, lower)
         band_powers = self._extract_band_powers(lower)
         recording_duration_sec = self._extract_duration(lower)
         clinical_flags = self._extract_clinical_flags(text, lower)
-        source_confidence = self._assess_confidence(prob_tier, clinical_flags, band_powers)
+        faa = self._extract_faa(lower)
+        source_confidence = self._assess_confidence(tier, clinical_flags, band_powers)
 
         return ClinicalExtraction(
-            overall_seizure_probability=seizure_prob,
+            depression_severity_score=score,
+            depression_risk_level=risk_level,
             background_rhythm=background_rhythm,
             clinical_flags=clinical_flags,
             recording_duration_sec=recording_duration_sec,
             band_powers=band_powers,
+            frontal_alpha_asymmetry=faa,
             source_confidence=source_confidence,
             extracted_fields={
-                "seizure_probability_tier": prob_tier,
-                "channels_mentioned": self._find_channels(text),
+                "depression_tier": tier,
+                "channels_mentioned": list(self._find_channels(text)),
                 "recording_duration_sec": recording_duration_sec,
             },
         )
 
-    # ── Seizure probability ────────────────────────────────────────────────
-
-    def _extract_seizure_probability(self, lower: str) -> tuple[float, str]:
+    def _extract_depression_score(self, lower: str) -> tuple[float, str]:
         import random
         rng = random.Random(42)
 
-        for pattern in _HIGH_SEIZURE:
-            if re.search(pattern, lower):
-                return round(rng.uniform(0.88, 0.95), 2), "HIGH"
+        # Try to extract explicit PHQ-9 score
+        m = re.search(r"PHQ.?9.*?(\d{1,2})", lower)
+        if m:
+            score = min(int(m.group(1)), 27)
+            return float(score), "EXPLICIT"
 
-        for pattern in _PROBABLE_SEIZURE:
-            if re.search(pattern, lower):
-                return round(rng.uniform(0.65, 0.82), 2), "PROBABLE"
+        for pat in _SEVERE_DEPRESSION:
+            if re.search(pat, lower):
+                return round(rng.uniform(20, 25), 1), "SEVERE"
+        for pat in _MODERATE_DEPRESSION:
+            if re.search(pat, lower):
+                return round(rng.uniform(12, 18), 1), "MODERATE"
+        for pat in _NO_DEPRESSION:
+            if re.search(pat, lower):
+                return round(rng.uniform(1, 4), 1), "NONE"
+        for pat in _MILD_DEPRESSION:
+            if re.search(pat, lower):
+                return round(rng.uniform(5, 9), 1), "MILD"
 
-        for pattern in _NO_SEIZURE:
-            if re.search(pattern, lower):
-                return round(rng.uniform(0.05, 0.18), 2), "NONE"
+        return 8.0, "UNKNOWN"
 
-        for pattern in _POSSIBLE_SEIZURE:
-            if re.search(pattern, lower):
-                return round(rng.uniform(0.38, 0.55), 2), "POSSIBLE"
-
-        return 0.30, "UNKNOWN"
-
-    # ── Background rhythm ──────────────────────────────────────────────────
+    def _extract_faa(self, lower: str) -> float:
+        for pat in _BIOMARKER_PATTERNS["alpha_asymmetry"]:
+            if re.search(pat, lower):
+                return -0.25  # negative = depression indicator
+        return 0.0
 
     def _extract_background_rhythm(self, text: str, lower: str) -> str:
-        # Try "X Hz alpha" style
-        m = re.search(r"(\d+(?:\.\d+)?)\s*[-–]?\s*(\d+(?:\.\d+)?)?\s*hz\s+(\w+)", lower)
-        if m:
-            freq = m.group(1)
-            band = m.group(3)
-            return f"Background {band} rhythm at {freq} Hz"
-
         if re.search(r"normal.*background|background.*normal|well.organised", lower):
-            return "Well-organised posterior alpha rhythm (9–11 Hz)"
-        if re.search(r"diffuse.*slow|slow.*background|generalised.*slow", lower):
+            return "Well-organised posterior alpha rhythm (9-11 Hz)"
+        if re.search(r"diffuse.*slow|slow.*background", lower):
             return "Diffuse cerebral slowing with excess delta/theta activity"
-        if re.search(r"excess delta|delta slowing", lower):
-            return "Diffuse cerebral slowing with excess delta activity"
-        if re.search(r"excess theta|theta slowing", lower):
+        if re.search(r"alpha.*suppress|reduced.*alpha", lower):
+            return "Reduced alpha activity with frontal theta predominance"
+        if re.search(r"excess theta|theta slowing|frontal theta", lower):
             return "Mild diffuse slowing with excess theta activity"
-        if re.search(r"low.voltage|fast activity", lower):
-            return "Low-voltage fast activity; background mildly disorganised"
-
         return "Background rhythm not clearly specified in source report"
-
-    # ── Band powers ────────────────────────────────────────────────────────
 
     def _extract_band_powers(self, lower: str) -> dict[str, float]:
         raw: dict[str, float] = {}
-
         for band, patterns in _BAND_KEYWORDS.items():
             for pat in patterns:
                 if re.search(pat, lower):
-                    raw[band] = {
-                        "delta": 0.50, "theta": 0.40, "alpha": 0.40,
-                        "beta": 0.30, "gamma": 0.15,
-                    }[band]
+                    raw[band] = {"delta": 0.50, "theta": 0.40, "alpha": 0.15, "beta": 0.30, "gamma": 0.15}[band]
                     break
 
         if not raw:
-            # Default neutral spectrum
             return {"delta": 0.20, "theta": 0.20, "alpha": 0.35, "beta": 0.20, "gamma": 0.05}
 
-        # Ensure all bands present, then normalise
         defaults = {"delta": 0.10, "theta": 0.10, "alpha": 0.20, "beta": 0.10, "gamma": 0.05}
         for band in defaults:
             if band not in raw:
@@ -202,91 +175,60 @@ class ClinicalNLPExtractor:
         total = sum(raw.values())
         return {k: round(v / total, 4) for k, v in raw.items()}
 
-    # ── Recording duration ─────────────────────────────────────────────────
-
     def _extract_duration(self, lower: str) -> float:
         for pat in _DURATION_PATTERNS:
             m = pat.search(lower)
             if m:
-                minutes = float(m.group(1))
-                return round(minutes * 60, 1)
-        return 120.0  # default 2-minute recording
-
-    # ── Clinical flags ─────────────────────────────────────────────────────
+                return round(float(m.group(1)) * 60, 1)
+        return 120.0
 
     def _extract_clinical_flags(self, text: str, lower: str) -> list[dict]:
         flags: list[dict] = []
         channels = self._find_channels(text)
-        temporal_present = bool(channels & TEMPORAL_CHANNELS)
 
-        # Collect timestamp mentions
-        timestamps = self._find_timestamps(lower)
-
-        # Determine event types present
-        for flag_type, patterns in _EVENT_KEYWORDS.items():
+        for flag_type, patterns in _BIOMARKER_PATTERNS.items():
             matched = any(re.search(pat, lower) for pat in patterns)
             if not matched:
                 continue
 
-            onset_sec = timestamps[0] if timestamps else 0.0
-            duration_sec = (timestamps[1] - timestamps[0]) if len(timestamps) >= 2 else 20.0
-            if duration_sec <= 0:
-                duration_sec = 20.0
-
-            involved = list(channels)[:4] if channels else []
-
-            if flag_type == "SEIZURE_EVENT":
-                laterality = "left" if any(c.endswith(("3", "7")) for c in involved) else "right"
-                region = "temporal" if temporal_present else "fronto-temporal"
-                desc = (
-                    f"Focal ictal discharge with {laterality} {region} predominance. "
-                    f"Onset at {onset_sec:.1f}s, duration {duration_sec:.0f}s. "
-                    + (f"Channels: {', '.join(involved[:2])}." if involved else "")
-                )
+            if flag_type == "alpha_asymmetry":
                 flags.append({
-                    "flag_type": "SEIZURE_EVENT",
+                    "flag_type": "FRONTAL_ASYMMETRY",
                     "severity": "HIGH",
-                    "onset_sec": onset_sec,
-                    "duration_sec": duration_sec,
-                    "channels_involved": involved,
-                    "description": desc,
+                    "onset_sec": 0.0,
+                    "duration_sec": 0.0,
+                    "channels_involved": ["F3", "F4", "Fp1", "Fp2"],
+                    "description": "Frontal alpha asymmetry detected in source report — depression biomarker.",
                 })
-
-            elif flag_type == "INTERICTAL_DISCHARGE" and not any(
-                f["flag_type"] == "SEIZURE_EVENT" for f in flags
-            ):
+            elif flag_type == "theta_elevation":
                 flags.append({
-                    "flag_type": "INTERICTAL_DISCHARGE",
-                    "severity": "MEDIUM",
-                    "onset_sec": onset_sec,
-                    "duration_sec": 2.0,
-                    "channels_involved": involved[:3],
-                    "description": f"Interictal epileptiform discharge noted at {onset_sec:.1f}s.",
-                })
-
-            elif flag_type == "SLOWING":
-                flags.append({
-                    "flag_type": "SLOWING",
+                    "flag_type": "DEPRESSIVE_PATTERN",
                     "severity": "MEDIUM",
                     "onset_sec": 0.0,
                     "duration_sec": 0.0,
-                    "channels_involved": [],
-                    "description": "Diffuse background slowing identified in source report.",
+                    "channels_involved": list(channels & FRONTAL_CHANNELS)[:4],
+                    "description": "Elevated theta activity detected — cortical hypoarousal pattern.",
                 })
-
-            elif flag_type == "ARTIFACT":
+            elif flag_type == "alpha_suppression":
                 flags.append({
-                    "flag_type": "ARTIFACT",
+                    "flag_type": "ALPHA_SUPPRESSION",
+                    "severity": "MEDIUM",
+                    "onset_sec": 0.0,
+                    "duration_sec": 0.0,
+                    "channels_involved": ["O1", "O2", "P3", "P4"],
+                    "description": "Reduced alpha power — associated with depressive cognition.",
+                })
+            elif flag_type == "sleep_disruption":
+                flags.append({
+                    "flag_type": "SLEEP_DISRUPTION",
                     "severity": "LOW",
-                    "onset_sec": onset_sec,
-                    "duration_sec": 5.0,
+                    "onset_sec": 0.0,
+                    "duration_sec": 0.0,
                     "channels_involved": [],
-                    "description": "Artifact noted in source report.",
+                    "description": "Sleep disruption indicators detected in source report.",
                 })
 
         return flags
-
-    # ── Helpers ────────────────────────────────────────────────────────────
 
     def _find_channels(self, text: str) -> set[str]:
         found = set()
@@ -295,44 +237,19 @@ class ClinicalNLPExtractor:
                 found.add(ch)
         return found
 
-    def _find_timestamps(self, lower: str) -> list[float]:
-        times: list[float] = []
-        for pat in _TS_PATTERNS:
-            for m in pat.finditer(lower):
-                groups = [g for g in m.groups() if g is not None]
-                if len(groups) == 2 and ":" in m.group(0):
-                    # mm:ss format
-                    times.append(int(groups[0]) * 60 + int(groups[1]))
-                elif len(groups) == 2:
-                    # from X to Y
-                    times.append(float(groups[0]))
-                    times.append(float(groups[1]))
-                elif groups:
-                    times.append(float(groups[0]))
-        return sorted(set(times))
-
-    def _assess_confidence(
-        self,
-        prob_tier: str,
-        flags: list[dict],
-        band_powers: dict,
-    ) -> str:
+    def _assess_confidence(self, tier: str, flags: list, band_powers: dict) -> str:
         score = 0
-        if prob_tier in ("HIGH", "NONE"):
+        if tier in ("SEVERE", "NONE", "EXPLICIT"):
             score += 2
-        elif prob_tier in ("PROBABLE", "POSSIBLE"):
+        elif tier in ("MODERATE", "MILD"):
             score += 1
-
         if flags:
             score += 1
         if len(flags) >= 2:
             score += 1
-
-        # Band powers that came from text keywords (non-default)
         non_default = sum(1 for v in band_powers.values() if v not in (0.20, 0.35, 0.05))
         if non_default >= 2:
             score += 1
-
         if score >= 4:
             return "HIGH"
         elif score >= 2:

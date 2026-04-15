@@ -80,15 +80,15 @@ export default function UploadPage() {
             <div className="text-3xl mb-2">🧪</div>
             <h3 className="font-bold text-indigo-800 mb-1">Load Demo EEG</h3>
             <p className="text-sm text-indigo-600 mb-4">
-              Generate a synthetic 19-channel 2-minute recording with a simulated focal temporal lobe seizure.
-              Perfect for demonstrating the full MANAS-1 analysis pipeline.
+              Generate a synthetic 19-channel 2-minute recording with simulated depression biomarkers
+              (frontal alpha asymmetry, theta elevation). Perfect for demonstrating the MANAS-1 analysis pipeline.
             </p>
             <div className="flex gap-3 justify-center">
               <button
                 onClick={() => loadDemo(true)}
                 className="bg-indigo-600 text-white px-5 py-2 rounded-lg text-sm font-semibold hover:bg-indigo-700 transition-colors"
               >
-                Demo with Seizure
+                Demo with Depression Pattern
               </button>
               <button
                 onClick={() => loadDemo(false)}
@@ -195,7 +195,7 @@ export default function UploadPage() {
           {state.step === 'analyzing' && state.epochTotal > 0 && (
             <div>
               <div className="flex justify-between text-sm text-gray-600 mb-2">
-                <span>{state.study?.source_type === 'pdf' ? 'NLP extraction & epoch synthesis…' : 'MANAS-1 analysing epochs…'}</span>
+                <span>{state.study?.source_type === 'pdf' ? 'NLP extraction & depression scoring…' : 'MANAS-1 depression analysis…'}</span>
                 <span>{state.epochProgress} / {state.epochTotal}</span>
               </div>
               <div className="h-2 bg-gray-100 rounded-full overflow-hidden">

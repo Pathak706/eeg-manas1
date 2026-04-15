@@ -4,9 +4,18 @@ import { useQuery } from '@tanstack/react-query'
 import { studiesApi } from '../api/studies'
 import { analysisApi } from '../api/analysis'
 import EEGWaveformViewer from '../components/viewer/EEGWaveformViewer'
-import SeizureProbabilityChart from '../components/viewer/SeizureProbabilityChart'
+import DepressionContributionChart from '../components/viewer/DepressionContributionChart'
 import ChannelAttentionHeatmap from '../components/viewer/ChannelAttentionHeatmap'
+import BiomarkerPanel from '../components/viewer/BiomarkerPanel'
 import type { EpochResult } from '../types'
+
+const RISK_STYLES: Record<string, { color: string; bg: string }> = {
+  Minimal:             { color: 'text-emerald-600', bg: 'bg-emerald-50 border-emerald-200' },
+  Mild:                { color: 'text-blue-600',    bg: 'bg-blue-50 border-blue-200' },
+  Moderate:            { color: 'text-amber-600',   bg: 'bg-amber-50 border-amber-200' },
+  'Moderately Severe': { color: 'text-orange-600',  bg: 'bg-orange-50 border-orange-200' },
+  Severe:              { color: 'text-red-600',     bg: 'bg-red-50 border-red-200' },
+}
 
 function ConfidenceBadge({ level }: { level: string }) {
   const colors: Record<string, string> = {
@@ -44,23 +53,7 @@ export default function AnalysisPage() {
 
   const [showExtractedText, setShowExtractedText] = useState(false)
 
-  const riskColor =
-    !analysis ? ''
-    : analysis.overall_seizure_probability >= 0.6 ? 'text-red-600'
-    : analysis.overall_seizure_probability >= 0.35 ? 'text-amber-600'
-    : 'text-emerald-600'
-
-  const riskLabel =
-    !analysis ? ''
-    : analysis.overall_seizure_probability >= 0.6 ? 'HIGH'
-    : analysis.overall_seizure_probability >= 0.35 ? 'MODERATE'
-    : 'LOW'
-
-  const riskBg =
-    !analysis ? ''
-    : analysis.overall_seizure_probability >= 0.6 ? 'bg-red-50 border-red-200'
-    : analysis.overall_seizure_probability >= 0.35 ? 'bg-amber-50 border-amber-200'
-    : 'bg-emerald-50 border-emerald-200'
+  const riskStyle = analysis ? (RISK_STYLES[analysis.depression_risk_level] ?? RISK_STYLES.Minimal) : { color: '', bg: '' }
 
   return (
     <div className="max-w-6xl mx-auto p-6">
@@ -74,7 +67,7 @@ export default function AnalysisPage() {
           {study?.is_synthetic && <span className="text-purple-600 font-medium">(Demo)</span>}
           {isPdf && (
             <span className="inline-flex items-center gap-1 bg-rose-100 text-rose-700 text-xs font-semibold px-2 py-0.5 rounded-full border border-rose-300">
-              📄 PDF Source
+              PDF Source
             </span>
           )}
         </span>
@@ -82,7 +75,7 @@ export default function AnalysisPage() {
 
       <div className="flex items-start justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-navy-600">EEG Analysis Results</h1>
+          <h1 className="text-2xl font-bold text-navy-600">EEG Depression Assessment</h1>
           <p className="text-sm text-gray-500 mt-1">
             {study
               ? isPdf
@@ -95,61 +88,70 @@ export default function AnalysisPage() {
           onClick={() => navigate(`/report/${sid}`)}
           className="bg-navy-600 text-white px-4 py-2 rounded-lg text-sm font-semibold hover:bg-navy-700 transition-colors"
         >
-          📄 Clinical Report
+          Clinical Report
         </button>
       </div>
 
       {isLoading && (
-        <div className="text-center py-16 text-gray-400 animate-pulse">Loading analysis…</div>
+        <div className="text-center py-16 text-gray-400 animate-pulse">Loading analysis...</div>
       )}
 
       {analysis && (
         <>
           {/* Summary banner */}
-          <div className={`border rounded-xl p-5 mb-6 ${riskBg}`}>
+          <div className={`border rounded-xl p-5 mb-6 ${riskStyle.bg}`}>
             <div className="flex items-start gap-6">
               <div className="text-center">
-                <div className={`text-4xl font-black ${riskColor}`}>
-                  {(analysis.overall_seizure_probability * 100).toFixed(0)}%
+                <div className={`text-4xl font-black ${riskStyle.color}`}>
+                  {analysis.depression_severity_score.toFixed(1)}
                 </div>
-                <div className="text-xs text-gray-500 mt-0.5">Seizure Probability</div>
-                <div className={`text-xs font-bold mt-1 ${riskColor}`}>{riskLabel} RISK</div>
+                <div className="text-xs text-gray-500 mt-0.5">/ 27 PHQ-9</div>
+                <div className={`text-xs font-bold mt-1 ${riskStyle.color}`}>
+                  {analysis.depression_risk_level.toUpperCase()}
+                </div>
               </div>
               <div className="flex-1">
                 <div className="text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">Background Rhythm</div>
-                <div className="text-sm text-gray-700 mb-3">{analysis.background_rhythm}</div>
-                <div className="text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">Model</div>
+                <div className="text-sm text-gray-700 mb-2">{analysis.background_rhythm}</div>
+                <div className="text-xs font-semibold text-gray-600 mb-1 uppercase tracking-wide">Frontal Alpha Asymmetry</div>
+                <div className="text-sm text-gray-700 mb-2">
+                  FAA = {analysis.frontal_alpha_asymmetry.toFixed(3)}
+                  {analysis.frontal_alpha_asymmetry < -0.1 && (
+                    <span className="ml-2 text-red-600 text-xs font-semibold">(depression indicator)</span>
+                  )}
+                </div>
                 <div className="text-xs text-gray-500">{analysis.model_version} · {analysis.processing_time_ms}ms</div>
               </div>
               {analysis.clinical_flags.length > 0 && (
                 <div className="shrink-0">
                   <div className="text-xs font-semibold text-gray-600 mb-2 uppercase tracking-wide">Clinical Flags</div>
                   <div className="flex flex-col gap-1.5">
-                    {analysis.clinical_flags.slice(0, 3).map((f, i) => (
+                    {analysis.clinical_flags.slice(0, 4).map((f, i) => (
                       <div key={i} className="flex items-center gap-2">
                         <span className={`text-xs font-bold ${f.severity === 'HIGH' ? 'text-red-600' : f.severity === 'MEDIUM' ? 'text-amber-600' : 'text-emerald-600'}`}>
                           {f.severity}
                         </span>
                         <span className="text-xs text-gray-600">{f.flag_type.replace(/_/g, ' ')}</span>
-                        <span className="text-xs text-gray-400">@ {f.onset_sec.toFixed(0)}s</span>
                       </div>
                     ))}
-                    {analysis.clinical_flags.length > 3 && (
-                      <span className="text-xs text-gray-400">+{analysis.clinical_flags.length - 3} more</span>
-                    )}
                   </div>
                 </div>
               )}
             </div>
           </div>
 
+          {/* Biomarker Panel + Depression Chart side by side */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+            <BiomarkerPanel biomarkers={analysis.biomarkers} />
+            <DepressionContributionChart epochs={analysis.epochs} onEpochClick={setSelectedEpoch} />
+          </div>
+
           {/* Visualizations */}
           <div className="space-y-4">
             {isPdf ? (
               <div className="bg-gray-50 border border-gray-200 rounded-xl p-6 text-center text-sm text-gray-500">
-                <div className="text-3xl mb-2">〰️</div>
                 <p className="font-medium text-gray-600">Waveform data not available for PDF-sourced studies.</p>
-                <p className="text-xs mt-1 text-gray-400">Raw EEG signal is required for waveform visualisation. Upload an EDF file to see the waveform.</p>
+                <p className="text-xs mt-1 text-gray-400">Upload an EDF file to see the EEG waveform.</p>
               </div>
             ) : (
               <EEGWaveformViewer
@@ -160,10 +162,7 @@ export default function AnalysisPage() {
               />
             )}
 
-            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <SeizureProbabilityChart epochs={analysis.epochs} onEpochClick={setSelectedEpoch} />
-              <ChannelAttentionHeatmap epochs={analysis.epochs} selectedEpochIndex={selectedEpoch?.epoch_index} />
-            </div>
+            <ChannelAttentionHeatmap epochs={analysis.epochs} selectedEpochIndex={selectedEpoch?.epoch_index} />
           </div>
 
           {/* Extracted report text (PDF only) */}
@@ -174,15 +173,15 @@ export default function AnalysisPage() {
                 className="w-full flex items-center justify-between px-5 py-3 text-left"
               >
                 <span className="font-semibold text-rose-800 text-sm flex items-center gap-2">
-                  📄 Extracted Report Text
+                  Extracted Report Text
                   {extractedText && <ConfidenceBadge level={extractedText.source_confidence} />}
                 </span>
-                <span className="text-rose-500 text-xs">{showExtractedText ? '▲ collapse' : '▼ expand'}</span>
+                <span className="text-rose-500 text-xs">{showExtractedText ? 'collapse' : 'expand'}</span>
               </button>
               {showExtractedText && (
                 <div className="px-5 pb-5">
                   <pre className="text-xs text-gray-700 whitespace-pre-wrap bg-white border border-rose-100 rounded-lg p-4 max-h-96 overflow-y-auto font-mono leading-relaxed">
-                    {extractedText?.markdown_text || 'Loading…'}
+                    {extractedText?.markdown_text || 'Loading...'}
                   </pre>
                 </div>
               )}
@@ -198,7 +197,7 @@ export default function AnalysisPage() {
           {/* Epoch table */}
           <div className="mt-4 bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
             <div className="px-4 py-3 border-b border-gray-100">
-              <h3 className="font-semibold text-navy-600 text-sm">Top Epochs by Seizure Probability</h3>
+              <h3 className="font-semibold text-navy-600 text-sm">Top Epochs by Depression Contribution</h3>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -206,7 +205,8 @@ export default function AnalysisPage() {
                   <tr>
                     <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">Epoch</th>
                     <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">Time</th>
-                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">Seizure Prob.</th>
+                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">Depression Contrib.</th>
+                    <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">FAA</th>
                     <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">Dom. Freq.</th>
                     <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">Top Channels</th>
                     <th className="px-3 py-2 text-left font-semibold uppercase tracking-wide">Confidence</th>
@@ -214,7 +214,7 @@ export default function AnalysisPage() {
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {[...analysis.epochs]
-                    .sort((a, b) => b.seizure_probability - a.seizure_probability)
+                    .sort((a, b) => b.depression_contribution - a.depression_contribution)
                     .slice(0, 10)
                     .map((ep) => {
                       const topChs = Object.entries(ep.channel_attention)
@@ -222,10 +222,10 @@ export default function AnalysisPage() {
                         .slice(0, 3)
                         .map(([ch]) => ch)
                         .join(', ')
-                      const pct = (ep.seizure_probability * 100).toFixed(0) + '%'
+                      const pct = (ep.depression_contribution * 100).toFixed(0) + '%'
                       const color =
-                        ep.seizure_probability >= 0.6 ? 'text-red-600 font-bold'
-                        : ep.seizure_probability >= 0.35 ? 'text-amber-600 font-semibold'
+                        ep.depression_contribution >= 0.7 ? 'text-red-600 font-bold'
+                        : ep.depression_contribution >= 0.4 ? 'text-amber-600 font-semibold'
                         : 'text-emerald-600'
                       return (
                         <tr
@@ -234,8 +234,9 @@ export default function AnalysisPage() {
                           onClick={() => setSelectedEpoch(ep)}
                         >
                           <td className="px-3 py-2">{ep.epoch_index + 1}</td>
-                          <td className="px-3 py-2">{ep.start_time_sec.toFixed(1)}s – {ep.end_time_sec.toFixed(1)}s</td>
+                          <td className="px-3 py-2">{ep.start_time_sec.toFixed(1)}s - {ep.end_time_sec.toFixed(1)}s</td>
                           <td className={`px-3 py-2 ${color}`}>{pct}</td>
+                          <td className="px-3 py-2">{ep.frontal_alpha_asymmetry.toFixed(3)}</td>
                           <td className="px-3 py-2">{ep.dominant_frequency_hz.toFixed(1)} Hz</td>
                           <td className="px-3 py-2 text-gray-600">{topChs}</td>
                           <td className="px-3 py-2 text-gray-500">{(ep.confidence * 100).toFixed(0)}%</td>
@@ -249,7 +250,8 @@ export default function AnalysisPage() {
 
           {/* Disclaimer */}
           <div className="mt-4 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-3">
-            ⚠️ <strong>AI Pre-Read Only.</strong> All findings require review and confirmation by a qualified neurologist before clinical use.
+            <strong>AI Depression Screening Only.</strong> EEG biomarkers are complementary to clinical assessment.
+            All findings require review by a qualified psychiatrist alongside standardised instruments (PHQ-9, BDI-II).
           </div>
         </>
       )}

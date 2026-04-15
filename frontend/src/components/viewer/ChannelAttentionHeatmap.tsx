@@ -47,7 +47,7 @@ export default function ChannelAttentionHeatmap({ epochs, selectedEpochIndex }: 
   return (
     <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-100">
-        <h3 className="font-semibold text-navy-600 text-sm">Channel Attention Heatmap</h3>
+        <h3 className="font-semibold text-navy-600 text-sm">Brain Region Activity Heatmap</h3>
         <p className="text-xs text-gray-400 mt-0.5">MANAS-1 attention weight per channel per epoch</p>
       </div>
       {channels.length === 0 ? (
