@@ -29,4 +29,15 @@ def get_db():
 def create_all_tables():
     # Import models so Base knows about them before creating tables
     from models import patient, study, analysis  # noqa: F401
+
+    # Check if we need to migrate (old schema had seizure_probability, new has depression_severity_score)
+    from sqlalchemy import inspect
+    inspector = inspect(engine)
+    if inspector.has_table("analysis_results"):
+        columns = {c["name"] for c in inspector.get_columns("analysis_results")}
+        if "overall_seizure_probability" in columns and "depression_severity_score" not in columns:
+            # Old schema detected — drop analysis tables and recreate
+            analysis.EpochResult.__table__.drop(engine, checkfirst=True)
+            analysis.AnalysisResult.__table__.drop(engine, checkfirst=True)
+
     Base.metadata.create_all(bind=engine)
