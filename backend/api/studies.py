@@ -91,9 +91,13 @@ async def create_demo_study(
     if not patient:
         raise HTTPException(status_code=404, detail="Patient not found")
 
-    # Generate synthetic EEG with depression patterns
+    # Generate synthetic EEG — unique seed per patient so waveforms differ
+    import random as _random
     generator = SyntheticEEGGenerator()
-    result = generator.generate(include_depression=include_depression)
+    result = generator.generate(
+        include_depression=include_depression,
+        seed=_random.randint(0, 2**31),
+    )
 
     # Save as .npz
     upload_dir = Path(settings.UPLOAD_DIR)

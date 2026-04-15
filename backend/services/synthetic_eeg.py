@@ -59,8 +59,9 @@ class SyntheticEEGGenerator:
     def generate(
         self,
         include_depression: bool = True,
-        seed: int = 42,
+        seed: int | None = None,
     ) -> SyntheticEEGResult:
+        # Use a random seed each call so every patient gets a unique waveform
         rng = np.random.default_rng(seed)
         n_samples = int(self.SAMPLE_RATE * self.DURATION_SEC)
         t = np.arange(n_samples) / self.SAMPLE_RATE
@@ -69,6 +70,8 @@ class SyntheticEEGGenerator:
 
         if include_depression:
             data = self._inject_depression_pattern(data, t, rng)
+        else:
+            data = self._inject_healthy_pattern(data, t, rng)
 
         data = self._inject_artifacts(data, t, rng)
 
@@ -167,6 +170,53 @@ class SyntheticEEGGenerator:
                     2 * np.pi * alpha_freq * t + rng.uniform(0, 2 * np.pi)
                 )
                 data[i] += reduction
+
+        return data
+
+    def _inject_healthy_pattern(
+        self,
+        data: np.ndarray,
+        t: np.ndarray,
+        rng: np.random.Generator,
+    ) -> np.ndarray:
+        """
+        Inject healthy/normal EEG patterns:
+        1. Strong, symmetric posterior alpha (well-organised alpha rhythm)
+        2. Positive FAA — left frontal alpha equal or slightly stronger than right
+        3. Low theta, balanced beta
+        This produces FAA ≥ 0 and high alpha power → Minimal/Mild scores.
+        """
+        sr = self.SAMPLE_RATE
+
+        # Boost posterior alpha strongly (O1, O2, P3, P4, Pz)
+        posterior = {"O1": 7, "O2": 8, "P3": 5, "P4": 6, "Pz": 18}
+        for ch, idx in posterior.items():
+            if idx < data.shape[0]:
+                alpha_freq = 10.0 + rng.uniform(-0.3, 0.3)
+                alpha_amp = CHANNEL_AMPLITUDE.get(ch, 40) * 0.7
+                data[idx] += alpha_amp * np.sin(
+                    2 * np.pi * alpha_freq * t + rng.uniform(0, 2 * np.pi)
+                )
+
+        # Left frontal alpha boost → positive FAA (healthy: left ≥ right)
+        left_frontal = {"Fp1": 0, "F3": 2, "F7": 10}
+        for ch, idx in left_frontal.items():
+            if idx < data.shape[0]:
+                alpha_freq = 10.0 + rng.uniform(-0.3, 0.3)
+                alpha_amp = CHANNEL_AMPLITUDE.get(ch, 35) * 0.35
+                data[idx] += alpha_amp * np.sin(
+                    2 * np.pi * alpha_freq * t + rng.uniform(0, 2 * np.pi)
+                )
+
+        # Slightly suppress right frontal alpha for asymmetry realism
+        right_frontal = {"Fp2": 1, "F4": 3, "F8": 11}
+        for ch, idx in right_frontal.items():
+            if idx < data.shape[0]:
+                alpha_freq = 10.0 + rng.uniform(-0.3, 0.3)
+                alpha_amp = CHANNEL_AMPLITUDE.get(ch, 35) * 0.12
+                data[idx] -= alpha_amp * np.sin(
+                    2 * np.pi * alpha_freq * t + rng.uniform(0, 2 * np.pi)
+                )
 
         return data
 
